@@ -1,0 +1,58 @@
+{
+  "business_signals": {
+    "business_unit": null,
+    "mentioned_forward_to_email": "Michele.Fellers@hillwood.com",
+    "mentioned_forward_to_name": "Michele Fellers",
+    "property_management_type": "third_party_managed_by_hillwood",
+    "source_mentions_reference_spreadsheet": true
+  },
+  "confidence": {
+    "business_signals": 0.82,
+    "document_type": 0.92,
+    "invoice_fields": 0.72,
+    "overall": 0.78,
+    "property_fields": 0.68
+  },
+  "document": {
+    "attachment_file_names": [
+      "Invoic~1.pdf",
+      "image001.png"
+    ],
+    "document_type": "invoice",
+    "flags": [
+      "conflicting_signals"
+    ],
+    "invoice_attachment_present": true
+  },
+  "email": {
+    "received_at": null,
+    "sender_email": "/O=EXCHANGELABS/OU=EXCHANGE ADMINISTRATIVE GROUP (FYDIBOHF23SPDLT)/CN=RECIPIENTS/CN=46100910A54B4986A8E81BCF969C14DD-PROPERTIESA",
+    "sender_name": "PropertiesAP",
+    "subject": "FW: Attached is your invoice #2857 from Alliance Landscape Co LLC"
+  },
+  "evidence": [
+    "Subject states invoice #2857 from Alliance Landscape Co LLC.",
+    "Forwarded message says: Attached is Invoice #2857 for work completed at Gateway 51.",
+    "Email body says the example is for a property that is 3rd Party Managed by Hillwood and processed via a different payables software system than Medius.",
+    "Email body says this invoice would be forwarded to Michele.Fellers@hillwood.com for processing.",
+    "Invoice amount, invoice date, due date, property address, and business unit are not present in the provided email text or attachment metadata."
+  ],
+  "extractor": {
+    "model": null,
+    "name": "codex_exec",
+    "prompt_version": "local_msg_extraction.v1",
+    "type": "codex_cli"
+  },
+  "invoice": {
+    "amount": null,
+    "currency": null,
+    "description": "work completed at Gateway 51",
+    "due_date": null,
+    "invoice_date": null,
+    "invoice_number": "2857",
+    "property_address": null,
+    "property_name": "Gateway 51",
+    "vendor_name": "Alliance Landscape Co LLC"
+  },
+  "schema_version": "extraction.v1"
+}

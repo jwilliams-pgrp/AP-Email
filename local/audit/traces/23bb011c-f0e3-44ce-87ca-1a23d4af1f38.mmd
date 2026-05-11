@@ -1,0 +1,14 @@
+flowchart TD
+  start["Audit Run<br/>23bb011c-f0e3-44ce-87ca-1a23d4af1f38"] -->|"Processing started"| ingestion["Email Received"]
+  ingestion -->|"Email details were recorded for audit review"| attachments["Attachments Saved"]
+  attachments -->|"Invoice files were preserved for review and routing"| extraction["Invoice Details Read"]
+  extraction -->|"Extractor returned structured invoice information"| validation["Required Fields Checked"]
+  validation -->|"Required invoice data passed schema checks"| duplicate["Duplicate History Checked"]
+  duplicate -->|"No blocking duplicate stopped processing"| routing["Property Routing Checked"]
+  routing -->|"Property and routing signals were matched against setup tables"| rules["Workflow Policy Applied"]
+  rules -->|"Confidence 0.74 below configured threshold 0.9 -> REVIEW"| decision["Business Decision<br/>REVIEW"]
+  decision -->|"Decision recorded with confidence 0.74"| action["Dry-Run Action Logged<br/>REVIEW_QUEUE"]
+  action -->|"No external system was changed in local dry-run mode"| finalize["Audit Complete"]
+  classDef success fill:#d1fae5,stroke:#15803d,color:#064e3b;
+  classDef failure fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d;
+  class start,ingestion,attachments,extraction,validation,duplicate,routing,rules,decision,action,finalize success;

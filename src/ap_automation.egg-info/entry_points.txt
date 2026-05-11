@@ -1,0 +1,2 @@
+[console_scripts]
+ap-automation = ap_automation.cli:main

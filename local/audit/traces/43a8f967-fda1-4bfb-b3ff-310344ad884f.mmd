@@ -1,0 +1,7 @@
+flowchart TD
+  start[Run 43a8f967-fda1-4bfb-b3ff-310344ad884f] --> ingestion[INGESTION]
+  ingestion --> attachments[ATTACHMENT_PROCESSING]
+  attachments --> extraction[LLM_EXTRACTION codex_cli_or_fixture]
+  extraction --> validation[VALIDATION]
+  validation --> failed[FAILED at VALIDATION]
+  failed --> error["Invalid extraction payload: evidence must be an object; document.document_flags must be a list of strings; document.link_only must be a boolean; document.multi_invoice must be a boolean; document.requires_merge must be a boolean; confidence.document_type must be a number; confidence.invoice_fields must be a number; confidence.property_identity must be a number; confidence.business_unit must be a number; evidence.summary must be a non-empty string"]

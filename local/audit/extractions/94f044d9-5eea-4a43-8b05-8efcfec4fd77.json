@@ -1,0 +1,69 @@
+{
+  "business_signals": {
+    "ach_or_auto_draft": false,
+    "ben_e_keith": false,
+    "conflicting_signals": false,
+    "link_only_invoice": false,
+    "low_text_quality": false,
+    "mentioned_destination": "Medius.PROP@hillwood.com",
+    "missing_invoice_attachment": false,
+    "past_due": true,
+    "requested_action": "combine invoice and backup support as one pdf and forward for processing"
+  },
+  "confidence": {
+    "business_unit": 0.2,
+    "document_type": 0.9,
+    "invoice": 0.92,
+    "overall": 0.84,
+    "property": 0.2
+  },
+  "document": {
+    "attachment_count": 3,
+    "document_type": "invoice",
+    "flags": [
+      "past_due"
+    ],
+    "has_invoice_attachment": true,
+    "has_supporting_backup": true,
+    "invoice_attachment_file_name": "Inv_R1~1.pdf",
+    "supporting_attachment_file_names": [
+      "269024~1.pdf"
+    ]
+  },
+  "email": {
+    "forwarded_from_email": "ahall@regentsvc.com",
+    "forwarded_from_name": "Amy Jo Hall",
+    "received_at": null,
+    "sender_email": "/O=EXCHANGELABS/OU=EXCHANGE ADMINISTRATIVE GROUP (FYDIBOHF23SPDLT)/CN=RECIPIENTS/CN=46100910A54B4986A8E81BCF969C14DD-PROPERTIESA",
+    "sender_name": "PropertiesAP",
+    "subject": "FW: **Past Due**   Invoice R134095 from Regent Services"
+  },
+  "evidence": [
+    "Subject states '**Past Due** Invoice R134095 from Regent Services'.",
+    "Email body states 'INVOICE # R134095 | Due on Fri, 12/05/2025'.",
+    "Email body states 'BALANCE DUE $1,318.43'.",
+    "Email body states 'Your invoice is attached.'",
+    "Email body says backup support was sent as a separate pdf and should be combined with the invoice.",
+    "No property name, property code, or business unit was present in the supplied email text or attachment metadata."
+  ],
+  "extractor": {
+    "model": null,
+    "name": "codex_exec",
+    "prompt_version": "local_msg_extraction.v1",
+    "type": "codex_cli"
+  },
+  "invoice": {
+    "account_number": null,
+    "amount_due": 1318.43,
+    "business_unit": null,
+    "currency": "USD",
+    "due_date": "2025-12-05",
+    "invoice_date": null,
+    "invoice_number": "R134095",
+    "property_code": null,
+    "property_name": null,
+    "purchase_order_number": null,
+    "vendor_name": "Regent Services"
+  },
+  "schema_version": "extraction.v1"
+}

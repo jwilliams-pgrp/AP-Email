@@ -1,0 +1,64 @@
+{
+  "business_signals": {
+    "bank_name": "bank of america",
+    "business_unit": null,
+    "draft_date": "2026-03-09",
+    "medius_processing_required": false,
+    "payment_method": "ACH",
+    "property": null,
+    "property_code": null,
+    "routing_destination": null
+  },
+  "confidence": {
+    "business_unit": 0.0,
+    "document_type": 0.96,
+    "invoice_facts": 0.35,
+    "overall": 0.88,
+    "property_facts": 0.0
+  },
+  "document": {
+    "attachment_count": 1,
+    "attachment_file_names": [
+      "752944~1.csv"
+    ],
+    "document_type": "ach_notice",
+    "flags": [
+      "ach_or_auto_draft",
+      "ben_e_keith"
+    ],
+    "has_invoice_attachment": false
+  },
+  "email": {
+    "received_at": null,
+    "sender_email": "/O=EXCHANGELABS/OU=EXCHANGE ADMINISTRATIVE GROUP (FYDIBOHF23SPDLT)/CN=RECIPIENTS/CN=46100910A54B4986A8E81BCF969C14DD-PROPERTIESA",
+    "sender_name": "PropertiesAP",
+    "subject": "FW: 752944/80040277-ACH EzPay Projected Payment"
+  },
+  "evidence": [
+    "Subject states \"ACH EzPay Projected Payment\".",
+    "Original sender shown as fnaach@benekeith.com.",
+    "Body says projected invoices selected for payment by ACH transmission.",
+    "Body says projected funds will be drawn from your account on 03/09/2026.",
+    "Body says this would not be processed in Medius and used for bank reconciliation purposes.",
+    "Attachment is a CSV file named 752944~1.csv, not an invoice document."
+  ],
+  "extractor": {
+    "model": null,
+    "name": "codex_exec",
+    "prompt_version": "local_msg_extraction.v1",
+    "type": "codex_cli"
+  },
+  "invoice": {
+    "account_number": "xxxxxxxx7768",
+    "amount": null,
+    "currency": null,
+    "due_date": null,
+    "invoice_date": null,
+    "invoice_number": null,
+    "property_code": null,
+    "property_name": null,
+    "vendor_email": "fnaach@benekeith.com",
+    "vendor_name": "Ben E Keith"
+  },
+  "schema_version": "extraction.v1"
+}

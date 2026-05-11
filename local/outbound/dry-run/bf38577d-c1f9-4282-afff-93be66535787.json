@@ -1,0 +1,10 @@
+{
+  "destination_code": "REVIEW_QUEUE",
+  "destination_email": null,
+  "dry_run": true,
+  "matched_rule_code": "hard_multi_invoice_pdf",
+  "matched_rule_version": 1,
+  "outcome": "REVIEW",
+  "reason": "Attachment appears to contain multiple invoices -> REVIEW",
+  "run_id": "bf38577d-c1f9-4282-afff-93be66535787"
+}

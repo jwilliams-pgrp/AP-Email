@@ -1,0 +1,84 @@
+{
+  "business_signals": {
+    "is_ach_notice": false,
+    "is_auto_draft_notice": false,
+    "is_past_due": true,
+    "is_payment_inquiry": true,
+    "is_statement": false,
+    "mentions_ach_payment_link": true,
+    "mentions_credit_card_payment_link": true,
+    "requires_review_reason": "Past due notice forwarded internally; invoice attachment metadata exists but attachment contents were not provided for validation, and vendor/business-unit facts are uncertain."
+  },
+  "confidence": {
+    "amount_due": 0.96,
+    "business_unit": 0.2,
+    "document_type": 0.95,
+    "invoice_number": 0.98,
+    "overall": 0.82,
+    "property": 0.9,
+    "vendor": 0.55
+  },
+  "document": {
+    "attachment_count": 1,
+    "document_type": "past_due_notice",
+    "file_names": [
+      "SIN369~1.pdf"
+    ],
+    "flags": [
+      "past_due"
+    ],
+    "is_link_only_invoice": false,
+    "low_text_quality": false,
+    "missing_invoice_attachment": false
+  },
+  "email": {
+    "forwarded": true,
+    "original_recipients": [
+      "propertiesap@hillwood.com",
+      "amy.willingham@efsteam.com"
+    ],
+    "original_sender_email": "shelly.marks@emrelevator.com",
+    "original_sender_name": "Shelly Marks",
+    "original_sent_at": "2026-03-05T09:08:00",
+    "received_at": null,
+    "sender_email": "/O=EXCHANGELABS/OU=EXCHANGE ADMINISTRATIVE GROUP (FYDIBOHF23SPDLT)/CN=RECIPIENTS/CN=46100910A54B4986A8E81BCF969C14DD-PROPERTIESA",
+    "sender_name": "PropertiesAP",
+    "subject": "FW: Overdue Invoice  SIN369676 -  Hillwood Alliance Airport Tower"
+  },
+  "evidence": {
+    "attachments": [
+      "SIN369~1.pdf"
+    ],
+    "body": [
+      "Invoice SIN369676 was due 3 days ago and has an outstanding balance of 340.84.",
+      "Payment can be made via ACH or credit card through the links below.",
+      "Subject: Overdue Invoice SIN369676 - Hillwood Alliance Airport Tower"
+    ],
+    "subject": [
+      "FW: Overdue Invoice  SIN369676 -  Hillwood Alliance Airport Tower"
+    ]
+  },
+  "extractor": {
+    "model": null,
+    "name": "codex_exec",
+    "prompt_version": "local_msg_extraction.v1",
+    "type": "codex_cli"
+  },
+  "invoice": {
+    "amount_due": 340.84,
+    "business_unit": null,
+    "currency": "USD",
+    "customer_number": "A-02081",
+    "due_date": null,
+    "invoice_date": null,
+    "invoice_number": "SIN369676",
+    "past_due_days": 3,
+    "property_code": null,
+    "property_name": "Hillwood Alliance Airport Tower",
+    "purchase_order_number": null,
+    "service_period": null,
+    "vendor_email": "shelly.marks@emrelevator.com",
+    "vendor_name": null
+  },
+  "schema_version": "extraction.v1"
+}

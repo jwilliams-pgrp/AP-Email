@@ -1,0 +1,10 @@
+{
+  "destination_code": "REVIEW_QUEUE",
+  "destination_email": null,
+  "dry_run": true,
+  "matched_rule_code": "confidence_below_threshold",
+  "matched_rule_version": 1,
+  "outcome": "REVIEW",
+  "reason": "Confidence 0.72 below configured threshold 0.9 -> REVIEW",
+  "run_id": "288752f4-6631-49c5-bf04-ff63c6eb2249"
+}

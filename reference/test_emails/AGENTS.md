@@ -1,0 +1,1 @@
+Contains emails similar to ones that will be coming in. They are forwarded from business user with a description of what the outcome expected is.
