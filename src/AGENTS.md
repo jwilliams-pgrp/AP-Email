@@ -15,17 +15,17 @@ Do not let repository code make business decisions. Do not let services embed mu
 
 ## Local-First Rules
 
-- Default behavior must remain `APP_ENV=LOCAL` and `DRY_RUN=true`.
+- Default behavior must remain `APP_ENV=LOCAL`.
 - Local processing may write local artifacts and local database records.
-- Local processing must not mutate external mailboxes, Blob Storage, production databases, or production notification channels.
-- Dry-run actions must be explicit records or manifests, not hidden no-ops.
+- Graph Intake processing may mutate the configured mailbox according to routing destinations.
+- Local processing must not mutate Blob Storage, production databases, or production notification channels.
 
 ## Decision Safety
 
 - Deterministic code makes final outcomes.
-- Missing, ambiguous, unsupported, or low-confidence inputs must resolve to `REVIEW` unless a spec defines a safer non-routing outcome.
+- Missing, ambiguous, unsupported, or low-confidence inputs must resolve to `ESCALATE` unless a spec defines a safer non-routing outcome.
 - Missing required workflow configuration should raise an explicit error instead of silently substituting defaults.
-- Keep final decision outputs audit-friendly: include outcome, reason, confidence, extracted fields, routing match, matched rule, and dry-run status.
+- Keep final decision outputs audit-friendly: include outcome, reason, confidence, extracted fields, routing match, and matched rule.
 
 ## Tests
 

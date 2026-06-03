@@ -19,16 +19,16 @@ This file is the source of truth for engineering behavior.
 - All acceptance criteria must be covered by tests.
 
 ## 1.2 Local-First Development
-- Default runtime is `LOCAL` with `DRY_RUN=true`.
-- Local mode must not mutate external systems.
+- Default runtime is `LOCAL`.
+- Local mode may mutate the configured Graph Intake mailbox according to routing destinations.
 - Code must run locally before cloud or production deployment.
 - Production behavior must be enabled explicitly through runtime config.
 
 ## 1.3 Safety Over Automation
-- When uncertain, choose `REVIEW`.
+- When uncertain, choose `ESCALATE`.
 - Never prioritize automation rate over correctness.
 - No silent failures, silent drops, or hidden fallback behavior.
-- Unsupported or ambiguous inputs must produce explicit reviewable outcomes.
+- Unsupported or ambiguous inputs must produce explicit ESCALATEable outcomes.
 
 ## 1.4 Deterministic Control
 - LLMs may extract and classify only.
@@ -77,7 +77,7 @@ All LLM outputs must:
 - Include confidence signals where applicable.
 - Be audit logged before use.
 
-Local mode LLM extraction must use `codex exec` through the CLI unless a test fixture is explicitly supplied.
+Local mode LLM extraction must use the configured Azure OpenAI extractor unless a test fixture is explicitly supplied.
 
 ## 2.3 Table-Driven Workflow Rules
 
@@ -90,7 +90,6 @@ Table-driven configuration includes:
 - confidence thresholds
 - amount thresholds
 - statement handling
-- sold property handling
 - duplicate detection policy
 - enabled or disabled rule status
 - effective dates and versioning
@@ -105,14 +104,14 @@ Routing decisions must follow this priority:
 2. Duplicate detection
 3. Routing table match
 4. Confidence threshold
-5. REVIEW fallback
+5. ESCALATE fallback
 
 ## 2.5 Allowed Outcomes
 
 Every email must resolve to one of:
 
 - `AUTO`: automatically routed
-- `REVIEW`: requires human decision
+- `ESCALATE`: requires human decision
 - `FILE`: stored without routing
 - `FLAG`: critical issue or misdirected
 - `DISCARD`: non-actionable, still logged
@@ -121,25 +120,24 @@ Every email must resolve to one of:
 
 # 3. Safety and Guardrails
 
-## 3.1 Dry Run Enforcement
-- All external actions must support `dry_run`.
-- Default behavior must not mutate external systems.
-- Any action must be explicitly enabled.
-- Dry-run decisions must still write local audit records.
+## 3.1 Action Execution
+- Runtime behavior must be uniform; do not implement alternate non-mutating execution paths.
+- Graph Intake mailbox actions must follow configured routing destinations.
+- All actions must create audit records.
 
 ## 3.2 Confidence Handling
-- If confidence is below the configured threshold, return `REVIEW`.
-- If required data is missing, return `REVIEW`.
-- If extracted signals conflict, return `REVIEW`.
+- If confidence is below the configured threshold, return `ESCALATE`.
+- If required data is missing, return `ESCALATE`.
+- If extracted signals conflict, return `ESCALATE`.
 
 ## 3.3 Duplicate Protection
 - Duplicate detection must run before any routing.
-- Suspected duplicates must go to `REVIEW`.
+- Suspected duplicates must go to `ESCALATE`.
 - Reprocessing must not create duplicate actions.
 
 ## 3.4 High-Risk Conditions
 
-High-risk conditions must default to `REVIEW` unless a spec explicitly defines a safer non-routing outcome such as `FILE`.
+High-risk conditions must default to `ESCALATE` unless a spec explicitly defines a safer non-routing outcome such as `FILE`.
 
 Examples:
 - Multi-invoice PDFs
@@ -162,7 +160,7 @@ Postgres must store:
 - routing entities
 - workflow rules and config
 - decisions
-- review queue entries
+- ESCALATE queue entries
 - audit runs and audit steps
 - seed and reference data lineage
 
@@ -185,6 +183,10 @@ Never store large binaries in Postgres.
 - `db/SCHEMA.md` is the canonical database data dictionary.
 - Every database schema change must update `db/SCHEMA.md` in the same change.
 - Database setup and seed command changes must update `db/README.md`.
+- Every SQL behavior, schema, or configuration change must update `db/schema.sql` and/or `db/seed.sql`.
+- `db/schema.sql` must remain a complete replayable DDL baseline using `create` and `alter` statements.
+- `db/seed.sql` must remain a complete replayable configuration and reference-data baseline using deterministic `insert ... on conflict`, replacement, or equivalent idempotent statements.
+- One-time targeted SQL files may be added only for narrowly named changes to existing databases; after acceptance, their final state must be folded back into `db/schema.sql` and/or `db/seed.sql`.
 - Database changes must preserve table-driven workflow policy and audit replay unless a spec explicitly changes that behavior.
 
 ---
@@ -202,7 +204,7 @@ Never store large binaries in Postgres.
 No cross-layer leakage allowed.
 
 ## 5.2 Service Rules
-- All external mutations must support dry run.
+- All external mutations must execute through explicit service paths.
 - All external mutations must produce logs.
 - All external mutations must create audit records.
 
@@ -234,7 +236,6 @@ Must include:
 - Duplicate invoice
 - Link-only invoice
 - Statement
-- Sold property
 - Unknown building
 - Low confidence extraction
 
@@ -259,7 +260,7 @@ Logs must be structured.
 
 Future production metrics include:
 - automation rate
-- review rate
+- ESCALATE rate
 - misroute rate
 - confidence distribution
 - rule hit distribution
@@ -290,7 +291,7 @@ Future production metrics include:
 1. Read applicable specs.
 2. Write or update tests.
 3. Implement the minimal change.
-4. Validate locally with `DRY_RUN=true`.
+4. Validate locally.
 5. Ensure audit logging.
 6. Update docs if behavior changed.
 
@@ -298,9 +299,20 @@ Future production metrics include:
 
 - Avoid broad recursive scans from the repository root. This workspace can contain large dependency, data, and generated-output directories.
 - Start with exact root-level paths, then inspect only the relevant subdirectory.
+- Project map:
+  - `specs/`: behavior specs; read `000-product.md`, then the numbered spec for the area being changed.
+  - `src/ap_automation/`: Python package for models, services, repositories, and LLM extraction adapters.
+  - `app/api/`: FastAPI dashboard and workflow-management API.
+  - `app/web/`: React dashboard frontend.
+  - `db/schema.sql`, `db/seed.sql`, `db/SCHEMA.md`, `db/README.md`: database source of truth and setup docs.
+  - `tests/`: backend unit, golden, repository, and local processor tests.
+  - `local/`, `app/web/node_modules/`, `app/web/dist/`, `db/introspection/`, caches, and `src/ap_automation.egg-info/`: generated or local-only output; avoid reading unless directly relevant.
+  - `reference/`: preserved business corpus; do not scan unless explicitly needed.
 - The local React app lives at `app/web`. Use `launch-react-app.ps1` from the repository root for local UI testing.
 - The local dashboard API lives at `app/api` and should run on `127.0.0.1:8001`; `127.0.0.1:8000` may be occupied by unrelated local services.
 - Use `launch-local-dashboard.ps1` from the repository root when the UI needs Postgres-backed API data and local artifact access.
+- Run backend tests with `pytest`.
+- Run frontend validation with `npm --prefix app/web run build`.
 - Prefer bounded file discovery commands with explicit names and shallow paths before using recursive search.
 
 ## 9.3 Planned Build Sequence
@@ -339,6 +351,6 @@ Update this file when:
 
 # 11. Non-Negotiable Rule
 
-When in doubt, return `REVIEW`.
+When in doubt, return `ESCALATE`.
 
 Never guess. Never assume. Never silently proceed.

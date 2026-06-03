@@ -2,152 +2,66 @@
 
 ## Purpose
 
-Define how the local operations app manages table-driven workflow configuration.
+Define the local management page behavior for process control display and Postgres-backed ownership management and asset lookup interactions.
 
-The management page exists so authorized local users can inspect and update workflow rules, destinations, and runtime configuration without editing SQL manually.
+This spec is pending redesign. New backend work must use `asset` and `ownership`; the existing property/address management UI must not drive schema compatibility requirements.
 
-## Managed Data
+## Scope
 
-The first local management page may manage:
-- `workflow_rules`
-- `workflow_rule_conditions`
-- `routing_destinations`
-- `runtime_config`
+The future management page must use asset terminology and the `/api/workflow/assets` backend surface.
 
-Future management may include:
-- `properties`
-- `property_aliases`
-- `property_routes`
-- `business_units`
+Out of scope for this version:
+- process toggle runtime service control
 
-Future managed areas require a spec update before implementation.
+## UI Requirements
 
-## Safety Principles
+- The page shows Manage Ownership, Asset Custom, and Asset Lookup sections; legacy add property, manage address, and property management sections are not displayed.
+- Manage Ownership reads and writes local Postgres `ownership` rows.
+- Users can add new ownership rows with required `ownership` and `destination` fields only.
+- Users can update the destination for an existing ownership row selected from the ownership dropdown.
+- Destination is selected from a distinct dropdown list sourced from `routing_destinations.destination_code`.
+- Asset Lookup is read-only.
+- Asset Custom appears between Manage Ownership and Asset Lookup.
+- Asset Custom reads and writes local Postgres `asset_custom` rows.
+- Asset Custom displays Asset Name, Asset Alias, Address, Routing Destination, Comment, and Actions columns.
+- Asset Custom add and edit are inline table-row workflows.
+- Asset Custom routing destination is a required dropdown sourced from `/api/workflow/destinations`; free-text destination entry is not allowed.
+- Asset Custom delete asks for confirmation and then physically deletes the row.
+- Asset Lookup displays the dataset returned by `vw_asset_lookup`.
+- Asset Lookup column headers use business-friendly asset and destination names.
+- Asset Lookup does not display Asset Source, Lookup ID, or Comment fields even when the API returns them.
+- A single Asset Lookup search input filters rows by matching any field.
 
-- Workflow policy remains in Postgres.
-- The UI must never hard-code mutable workflow policy.
-- Historical decisions, actions, audit runs, and audit steps are read-only.
-- Configuration changes must be explicit and reviewable before save.
-- Rule changes must preserve audit replay through effective dating and versioning.
-- Invalid configuration must fail with actionable validation errors.
+## Safety and Local Behavior
 
-## Management Page Requirements
-
-The management page must show:
-- workflow rules sorted by priority
-- enabled/disabled status
-- rule version
-- effective start and end dates
-- condition type
-- condition values
-- outcome
-- destination
-- reason template
-- created and updated timestamps
-- recent management audit events for selected configuration records
-
-The page must support:
-- search and filters for enabled status, outcome, destination, and condition type
-- viewing rule conditions as structured JSON
-- editing enabled status
-- editing priority
-- editing outcome where allowed by deterministic evaluator constraints
-- editing destination where destination is applicable
-- editing reason template
-- editing effective dates
-- editing runtime config thresholds and local handling choices
-- viewing destinations and whether they are active
-- viewing management audit history for rule, destination, and runtime config changes
-
-## Versioning Requirements
-
-Rule edits must not overwrite historical meaning needed for audit replay.
-
-When a rule behavior field changes, the system must create a new version or effective-dated replacement according to the database strategy defined before implementation.
-
-Behavior fields include:
-- priority
-- enabled
-- condition type
-- condition values
-- outcome
-- destination
-- reason template
-- effective dates
-
-The implementation must either:
-- add schema support for immutable rule versions, or
-- document and test how the current schema preserves replay before allowing edits.
-
-The database must include `workflow_rule_versions` so decisions that record `matched_rule_code` and `matched_rule_version` can be replayed against the rule snapshot that existed at decision time.
-
-Immediate rule editing is in scope. Each accepted behavior-changing edit must:
-- create a `management_audit_events` row
-- create a new `workflow_rule_versions` row with the resulting rule and condition snapshot
-- update the current editable `workflow_rules` and `workflow_rule_conditions` rows
-- increment `workflow_rules.version`
-
-## Validation Requirements
-
-Before saving, the API must validate:
-- rule code exists or is unique for creates
-- condition type is supported by deterministic code
-- condition JSON matches the expected shape for the condition type
-- outcome is one of the allowed decision outcomes
-- destination exists and is active when required
-- effective end is null or on/after effective start
-- priority does not create ambiguous ordering for active overlapping rules unless explicitly allowed by spec
-- runtime config values have the expected JSON type
-
-The UI must display validation errors next to the affected field or section.
-
-## Audit Requirements
-
-Every configuration mutation must create a management audit record before the feature is considered complete.
-
-The audit record must include:
-- changed table
-- changed key
-- old value
-- new value
-- changed by
-- changed at
-- reason or note when provided
-
-The existing `audit_runs` and `audit_steps` tables are for per-email processing traces. They must not be reused as the primary audit log for workflow management changes.
-
-The primary management audit table is `management_audit_events`.
-
-## Local-Only Scope
-
-Initial management is local-only.
-
-The app must make local mode visible and must not imply production configuration is being changed.
-
-Production authentication, authorization, approval workflows, and deployment are out of scope until separate specs define them.
+- The page must not mutate external systems.
+- The process toggle is UI-only and does not change runtime service behavior.
+- The selected process toggle option is vertically centered; selected `On` is green and selected `Off` is red.
+- Ownership add and destination updates persist to local Postgres `ownership` rows through `/api/workflow/ownership`.
+- Ownership mutations write `management_audit_events` rows with `changed_table = 'ownership'`.
+- Asset Custom mutations write `management_audit_events` rows with `changed_table = 'asset_custom'`.
+- Asset Lookup does not mutate local data or external systems.
 
 ## Testing Requirements
 
-Tests must cover:
-- listing workflow rules
-- listing destinations
-- listing runtime config
-- listing management audit events
-- validation for invalid condition JSON
-- validation for missing required destination
-- validation for invalid effective dates
-- versioning or effective-dated replacement behavior
-- management audit record creation
-- read-only protection for historical operational records
+Given current frontend tooling in this repo, acceptance validation for this increment is:
+- React production build succeeds.
+- Manual UI verification confirms toggle behavior, ownership add, ownership destination update, Asset Custom add/edit/delete, destination dropdown values including `ESCALATE_SPECIAL_ADDRESS`, and asset lookup search against persisted Postgres data.
+
+When frontend test tooling is introduced, automated coverage must include:
+- search across all Asset Lookup fields
+- add ownership flow
+- update ownership destination flow
+- process toggle state change
 
 ## Acceptance Criteria
 
-- The management page lists workflow rules from Postgres.
-- The management page lists routing destinations and runtime config from Postgres.
-- Editable fields use explicit save/cancel behavior.
-- Invalid edits are rejected with visible validation errors.
-- Rule behavior changes preserve audit replay through versioning or effective dating.
-- Every accepted configuration change records a management audit entry.
-- Management audit history is visible for selected workflow configuration records.
-- Historical processing records cannot be edited through the management UI or API.
-- Tests cover workflow listing, validation, versioning/effective dating, and management audit logging.
+- Management page only shows process toggle, Manage Ownership, and Asset Lookup features defined in the redesigned spec.
+- Process `On`/`Off` toggle switches visible state in UI.
+- Manage Ownership reads from local Postgres `ownership` rows.
+- Manage Ownership supports persisted add through API with only `ownership` and `destination` required.
+- Manage Ownership supports persisted destination updates for selected existing ownership rows.
+- Manage Ownership destination options are distinct values from `routing_destinations.destination_code`.
+- Asset Lookup reads joined `asset`, `ownership`, and `routing_destinations` fields.
+- Asset Lookup hides Asset Source, Lookup ID, and Comment in the table.
+- Search input filters across every Asset Lookup field.

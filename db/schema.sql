@@ -1,324 +1,1189 @@
--- AP Automation local schema.
--- Idempotent by design: safe to rerun during local development.
+--
+-- PostgreSQL database dump
+--
 
-create extension if not exists pgcrypto;
+\restrict jVhKTxV59XXm4MB1OCWI1jFUJKWD0cKqj9hc7UI3FKEbL86Md5WCBG2fP9dZ3QR
 
-do $$
-begin
-  if not exists (select 1 from pg_type where typname = 'decision_outcome') then
-    create type decision_outcome as enum ('AUTO', 'REVIEW', 'FILE', 'FLAG', 'DISCARD');
-  end if;
+-- Dumped from database version 18.3
+-- Dumped by pg_dump version 18.3
 
-  if not exists (select 1 from pg_type where typname = 'audit_step_type') then
-    create type audit_step_type as enum (
-      'INGESTION',
-      'ATTACHMENT_PROCESSING',
-      'LLM_EXTRACTION',
-      'VALIDATION',
-      'DUPLICATE_CHECK',
-      'ROUTING_MATCH',
-      'RULE_EVALUATION',
-      'DECISION',
-      'ACTION',
-      'FINALIZE'
-    );
-  end if;
-end $$;
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET idle_in_transaction_session_timeout = 0;
+SET transaction_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET xmloption = content;
+SET client_min_messages = warning;
+SET row_security = off;
 
-create table if not exists seed_batches (
-  seed_batch_code text primary key,
-  description text not null,
-  source_file text,
-  source_hash text,
-  imported_by text not null default current_user,
-  imported_at timestamptz not null default now(),
-  metadata jsonb not null default '{}'::jsonb
-);
+--
+-- Name: public; Type: SCHEMA; Schema: -; Owner: -
+--
 
-create table if not exists runtime_config (
-  config_key text primary key,
-  config_value jsonb not null,
-  description text not null,
-  seed_batch_code text references seed_batches(seed_batch_code),
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
+CREATE SCHEMA IF NOT EXISTS public;
 
-create table if not exists routing_destinations (
-  destination_code text primary key,
-  destination_type text not null,
-  display_name text not null,
-  email_address text,
-  folder_path text,
-  subject_instruction text,
-  active boolean not null default true,
-  seed_batch_code text references seed_batches(seed_batch_code),
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  constraint routing_destinations_target_check check (
-    email_address is not null or folder_path is not null or destination_type in ('review_queue', 'no_action')
-  )
-);
 
-create table if not exists business_units (
-  business_unit_code text primary key,
-  name text not null,
-  category text not null,
-  cost_center text,
-  default_destination_code text references routing_destinations(destination_code),
-  active boolean not null default true,
-  seed_batch_code text references seed_batches(seed_batch_code),
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
+--
+-- Name: SCHEMA public; Type: COMMENT; Schema: -; Owner: -
+--
 
-create table if not exists properties (
-  property_id uuid primary key default gen_random_uuid(),
-  property_code text not null unique,
-  property_name text,
-  cost_center text,
-  ownership_type text not null default 'unknown',
-  management_type text not null default 'unknown',
-  business_unit_code text references business_units(business_unit_code),
-  default_destination_code text references routing_destinations(destination_code),
-  is_sold boolean not null default false,
-  active boolean not null default true,
-  seed_batch_code text references seed_batches(seed_batch_code),
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
+COMMENT ON SCHEMA public IS 'standard public schema';
 
-create table if not exists property_aliases (
-  alias_id uuid primary key default gen_random_uuid(),
-  property_id uuid not null references properties(property_id) on delete cascade,
-  alias_type text not null,
-  alias_value text not null,
-  source_sheet text,
-  source_row integer,
-  seed_batch_code text references seed_batches(seed_batch_code),
-  created_at timestamptz not null default now(),
-  unique (alias_type, alias_value)
-);
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
+CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;
 
-create index if not exists property_aliases_value_lower_idx
-  on property_aliases (lower(alias_value));
 
-create or replace function coalesce_text(value text)
-returns text
-language sql
-immutable
-as $$
+--
+-- Name: coalesce_text(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.coalesce_text(value text) RETURNS text
+    LANGUAGE sql IMMUTABLE
+    AS $$
   select coalesce(value, '')
 $$;
 
-create table if not exists property_routes (
-  property_route_id uuid primary key default gen_random_uuid(),
-  property_id uuid not null references properties(property_id) on delete cascade,
-  destination_code text references routing_destinations(destination_code),
-  route_label text,
-  subject_instruction text,
-  source_sheet text,
-  source_row integer,
-  seed_batch_code text references seed_batches(seed_batch_code),
-  active boolean not null default true,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+
+SET default_tablespace = '';
+
+SET default_table_access_method = heap;
+
+--
+-- Name: actions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.actions (
+    action_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    email_id uuid NOT NULL,
+    decision_id uuid,
+    action_type text NOT NULL,
+    destination_code text,
+    status text NOT NULL,
+    external_reference text,
+    reason text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    completed_at timestamp with time zone,
+    document_item_id uuid
 );
 
-create unique index if not exists property_routes_unique_idx
-  on property_routes (property_id, coalesce_text(route_label), coalesce_text(destination_code));
 
-create table if not exists reference_rows (
-  reference_row_id uuid primary key default gen_random_uuid(),
-  source_file text not null,
-  source_sheet text not null,
-  source_row integer not null,
-  row_data jsonb not null,
-  seed_batch_code text references seed_batches(seed_batch_code),
-  imported_at timestamptz not null default now(),
-  unique (source_file, source_sheet, source_row)
+--
+-- Name: asset; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.asset (
+    id bigint NOT NULL,
+    asset_name character varying(255) NOT NULL,
+    ownership character varying(255),
+    asset_type character varying(100),
+    asset_alias character varying(255),
+    market_name character varying(255),
+    market_area character varying(255),
+    tenants text,
+    address text,
+    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 
-create table if not exists workflow_rules (
-  rule_code text primary key,
-  rule_name text not null,
-  priority integer not null,
-  enabled boolean not null default true,
-  condition_type text not null,
-  outcome decision_outcome not null,
-  destination_code text references routing_destinations(destination_code),
-  reason_template text not null,
-  effective_start date not null default current_date,
-  effective_end date,
-  version integer not null default 1,
-  seed_batch_code text references seed_batches(seed_batch_code),
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  constraint workflow_rules_effective_dates_check check (effective_end is null or effective_end >= effective_start)
+CREATE TABLE public.asset_custom (
+    id bigint NOT NULL,
+    asset_alias character varying(255),
+    asset_name character varying(255) NOT NULL,
+    address text,
+    destination_code character varying(100),
+    comment text,
+    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 
-create index if not exists workflow_rules_active_idx
-  on workflow_rules (enabled, priority, effective_start, effective_end);
 
-create table if not exists workflow_rule_conditions (
-  condition_id uuid primary key default gen_random_uuid(),
-  rule_code text not null references workflow_rules(rule_code) on delete cascade,
-  condition_key text not null,
-  condition_value jsonb not null,
-  created_at timestamptz not null default now(),
-  unique (rule_code, condition_key)
+--
+-- Name: asset_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.asset_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: asset_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.asset_id_seq OWNED BY public.asset.id;
+
+CREATE SEQUENCE public.asset_custom_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+ALTER SEQUENCE public.asset_custom_id_seq OWNED BY public.asset_custom.id;
+
+
+--
+-- Name: attachments; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.attachments (
+    attachment_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    email_id uuid NOT NULL,
+    file_name text NOT NULL,
+    content_type text,
+    storage_path text NOT NULL,
+    file_size_bytes bigint,
+    sha256 text,
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
-create table if not exists management_audit_events (
-  management_audit_event_id uuid primary key default gen_random_uuid(),
-  changed_table text not null,
-  changed_key text not null,
-  change_type text not null,
-  old_value jsonb,
-  new_value jsonb not null,
-  changed_by text not null default current_user,
-  changed_at timestamptz not null default now(),
-  reason text,
-  request_metadata jsonb not null default '{}'::jsonb
+
+--
+-- Name: audit_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.audit_runs (
+    run_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    email_id uuid,
+    status text NOT NULL,
+    started_at timestamp with time zone DEFAULT now() NOT NULL,
+    completed_at timestamp with time zone,
+    final_outcome text,
+    trace_artifact_path text,
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL
 );
 
-create index if not exists management_audit_events_lookup_idx
-  on management_audit_events (changed_table, changed_key, changed_at desc);
 
-create table if not exists workflow_rule_versions (
-  rule_version_id uuid primary key default gen_random_uuid(),
-  rule_code text not null references workflow_rules(rule_code),
-  version integer not null,
-  rule_name text not null,
-  priority integer not null,
-  enabled boolean not null,
-  condition_type text not null,
-  condition_snapshot jsonb not null default '{}'::jsonb,
-  outcome decision_outcome not null,
-  destination_code text references routing_destinations(destination_code),
-  reason_template text not null,
-  effective_start date not null,
-  effective_end date,
-  management_audit_event_id uuid references management_audit_events(management_audit_event_id),
-  created_at timestamptz not null default now(),
-  constraint workflow_rule_versions_effective_dates_check check (effective_end is null or effective_end >= effective_start),
-  unique (rule_code, version)
+--
+-- Name: audit_steps; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.audit_steps (
+    step_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    run_id uuid NOT NULL,
+    sequence_number integer NOT NULL,
+    step_type text NOT NULL,
+    input_summary jsonb DEFAULT '{}'::jsonb NOT NULL,
+    output_summary jsonb DEFAULT '{}'::jsonb NOT NULL,
+    decision jsonb,
+    reason text,
+    confidence numeric(5,4),
+    error text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
-create index if not exists workflow_rule_versions_lookup_idx
-  on workflow_rule_versions (rule_code, version);
 
-create table if not exists emails (
-  email_id uuid primary key default gen_random_uuid(),
-  source_system text not null default 'local_file',
-  source_message_id text not null,
-  idempotency_key text not null unique,
-  subject text,
-  sender_email text,
-  received_at timestamptz,
-  raw_storage_path text,
-  html_storage_path text,
-  metadata jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now()
+--
+-- Name: decisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.decisions (
+    decision_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    email_id uuid NOT NULL,
+    run_id uuid,
+    outcome text NOT NULL,
+    destination_code text,
+    destination_email text,
+    reason text NOT NULL,
+    confidence numeric(5,4),
+    matched_rule_code text,
+    matched_rule_version integer,
+    extracted_fields jsonb DEFAULT '{}'::jsonb NOT NULL,
+    routing_match jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    document_item_id uuid
 );
 
-alter table emails
-  add column if not exists html_storage_path text;
 
-create table if not exists attachments (
-  attachment_id uuid primary key default gen_random_uuid(),
-  email_id uuid not null references emails(email_id) on delete cascade,
-  file_name text not null,
-  content_type text,
-  storage_path text not null,
-  file_size_bytes bigint,
-  sha256 text,
-  metadata jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now()
+--
+-- Name: document_items; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.document_items (
+    document_item_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    email_id uuid NOT NULL,
+    item_kind text NOT NULL,
+    attachment_id uuid,
+    item_key text NOT NULL,
+    display_name text,
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT document_items_kind_check CHECK ((item_kind = ANY (ARRAY['attachment'::text, 'email'::text])))
 );
 
-create unique index if not exists attachments_email_path_hash_idx
-  on attachments (email_id, storage_path, sha256);
 
-create table if not exists extractions (
-  extraction_id uuid primary key default gen_random_uuid(),
-  email_id uuid not null references emails(email_id) on delete cascade,
-  extractor_type text not null,
-  model_name text,
-  prompt_version text,
-  raw_output jsonb,
-  parsed_output jsonb not null,
-  confidence numeric(5,4),
-  validation_status text not null,
-  validation_errors jsonb not null default '[]'::jsonb,
-  created_at timestamptz not null default now()
+--
+-- Name: emails; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.emails (
+    email_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    source_system text DEFAULT 'local_file'::text NOT NULL,
+    source_message_id text NOT NULL,
+    idempotency_key text NOT NULL,
+    subject text,
+    sender_email text,
+    received_at timestamp with time zone,
+    raw_storage_path text,
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    html_storage_path text,
+    office_web_link text
 );
 
-create table if not exists audit_runs (
-  run_id uuid primary key default gen_random_uuid(),
-  email_id uuid references emails(email_id),
-  status text not null,
-  started_at timestamptz not null default now(),
-  completed_at timestamptz,
-  final_outcome decision_outcome,
-  trace_artifact_path text,
-  metadata jsonb not null default '{}'::jsonb
+
+--
+-- Name: escalate_queue; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.escalate_queue (
+    escalate_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    email_id uuid NOT NULL,
+    decision_id uuid,
+    status text DEFAULT 'open'::text NOT NULL,
+    priority text DEFAULT 'normal'::text NOT NULL,
+    reason text NOT NULL,
+    assigned_to text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    resolved_at timestamp with time zone,
+    source_message_id text,
+    office_web_link text,
+    last_seen_in_escalate_at timestamp with time zone,
+    active boolean DEFAULT true NOT NULL,
+    document_item_id uuid
 );
 
-create table if not exists audit_steps (
-  step_id uuid primary key default gen_random_uuid(),
-  run_id uuid not null references audit_runs(run_id) on delete cascade,
-  sequence_number integer not null,
-  step_type audit_step_type not null,
-  input_summary jsonb not null default '{}'::jsonb,
-  output_summary jsonb not null default '{}'::jsonb,
-  decision jsonb,
-  reason text,
-  confidence numeric(5,4),
-  error text,
-  created_at timestamptz not null default now(),
-  unique (run_id, sequence_number)
+
+--
+-- Name: extractions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.extractions (
+    extraction_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    email_id uuid NOT NULL,
+    extractor_type text NOT NULL,
+    model_name text,
+    prompt_version text,
+    raw_output jsonb,
+    parsed_output jsonb NOT NULL,
+    confidence numeric(5,4),
+    validation_status text NOT NULL,
+    validation_errors jsonb DEFAULT '[]'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    document_item_id uuid
 );
 
-create table if not exists decisions (
-  decision_id uuid primary key default gen_random_uuid(),
-  email_id uuid not null references emails(email_id) on delete cascade,
-  run_id uuid references audit_runs(run_id),
-  outcome decision_outcome not null,
-  destination_code text references routing_destinations(destination_code),
-  destination_email text,
-  reason text not null,
-  confidence numeric(5,4),
-  matched_rule_code text references workflow_rules(rule_code),
-  matched_rule_version integer,
-  extracted_fields jsonb not null default '{}'::jsonb,
-  routing_match jsonb not null default '{}'::jsonb,
-  dry_run boolean not null default true,
-  created_at timestamptz not null default now()
+
+--
+-- Name: invoices; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.invoices (
+    invoice_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    email_id uuid NOT NULL,
+    vendor_name text,
+    invoice_number text,
+    invoice_date date,
+    amount numeric(12,2),
+    currency text,
+    duplicate_fingerprint text,
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    document_item_id uuid
 );
 
-create table if not exists actions (
-  action_id uuid primary key default gen_random_uuid(),
-  email_id uuid not null references emails(email_id) on delete cascade,
-  decision_id uuid references decisions(decision_id),
-  action_type text not null,
-  destination_code text references routing_destinations(destination_code),
-  dry_run boolean not null default true,
-  status text not null,
-  external_reference text,
-  reason text,
-  created_at timestamptz not null default now(),
-  completed_at timestamptz
+
+--
+-- Name: llm_interactions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.llm_interactions (
+    llm_interaction_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    email_id uuid NOT NULL,
+    run_id uuid NOT NULL,
+    step_id uuid,
+    extraction_id uuid,
+    interaction_type text NOT NULL,
+    provider text NOT NULL,
+    model_name text,
+    deployment_name text,
+    api_version text,
+    prompt_template_name text,
+    prompt_version text,
+    prompt_artifact_path text,
+    response_artifact_path text,
+    request_parameters jsonb DEFAULT '{}'::jsonb NOT NULL,
+    prompt_tokens integer,
+    completion_tokens integer,
+    total_tokens integer,
+    cached_prompt_tokens integer,
+    reasoning_tokens integer,
+    raw_usage jsonb DEFAULT '{}'::jsonb NOT NULL,
+    latency_ms integer,
+    status text NOT NULL,
+    error text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT llm_interactions_cached_prompt_tokens_check CHECK (((cached_prompt_tokens IS NULL) OR (cached_prompt_tokens >= 0))),
+    CONSTRAINT llm_interactions_completion_tokens_check CHECK (((completion_tokens IS NULL) OR (completion_tokens >= 0))),
+    CONSTRAINT llm_interactions_latency_ms_check CHECK (((latency_ms IS NULL) OR (latency_ms >= 0))),
+    CONSTRAINT llm_interactions_prompt_tokens_check CHECK (((prompt_tokens IS NULL) OR (prompt_tokens >= 0))),
+    CONSTRAINT llm_interactions_reasoning_tokens_check CHECK (((reasoning_tokens IS NULL) OR (reasoning_tokens >= 0))),
+    CONSTRAINT llm_interactions_total_tokens_check CHECK (((total_tokens IS NULL) OR (total_tokens >= 0)))
 );
 
-create table if not exists review_queue (
-  review_id uuid primary key default gen_random_uuid(),
-  email_id uuid not null references emails(email_id) on delete cascade,
-  decision_id uuid references decisions(decision_id),
-  status text not null default 'open',
-  priority text not null default 'normal',
-  reason text not null,
-  assigned_to text,
-  created_at timestamptz not null default now(),
-  resolved_at timestamptz
+
+--
+-- Name: management_audit_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.management_audit_events (
+    management_audit_event_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    changed_table text NOT NULL,
+    changed_key text NOT NULL,
+    change_type text NOT NULL,
+    old_value jsonb,
+    new_value jsonb NOT NULL,
+    changed_by text DEFAULT CURRENT_USER NOT NULL,
+    changed_at timestamp with time zone DEFAULT now() NOT NULL,
+    reason text,
+    request_metadata jsonb DEFAULT '{}'::jsonb NOT NULL
 );
+
+
+--
+-- Name: no_action_email_patterns; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.no_action_email_patterns (
+    pattern_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    pattern_name text NOT NULL,
+    sender_email_equals text,
+    sender_domain_equals text,
+    subject_regex text,
+    body_regex text,
+    reason_template text NOT NULL,
+    priority integer DEFAULT 100 NOT NULL,
+    enabled boolean DEFAULT true NOT NULL,
+    effective_start date DEFAULT CURRENT_DATE NOT NULL,
+    effective_end date,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT no_action_email_patterns_at_least_one_match_check CHECK (((sender_email_equals IS NOT NULL) OR (sender_domain_equals IS NOT NULL) OR (subject_regex IS NOT NULL) OR (body_regex IS NOT NULL))),
+    CONSTRAINT no_action_email_patterns_effective_dates_check CHECK (((effective_end IS NULL) OR (effective_end >= effective_start)))
+);
+
+
+--
+-- Name: ownership; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.ownership (
+    ownership character varying(255),
+    destination character varying(255),
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP
+);
+
+
+--
+-- Name: routing_destinations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.routing_destinations (
+    destination_code text NOT NULL,
+    display_name text NOT NULL,
+    email_address text,
+    active boolean DEFAULT true NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    parent_folder text,
+    label text,
+    send_teams_message boolean DEFAULT false,
+    send_email boolean DEFAULT false
+);
+
+
+--
+-- Name: runtime_config; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.runtime_config (
+    config_key text NOT NULL,
+    config_value jsonb NOT NULL,
+    description text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: workflow_rule_conditions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.workflow_rule_conditions (
+    condition_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    rule_code text NOT NULL,
+    condition_key text NOT NULL,
+    condition_value jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: workflow_rule_versions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.workflow_rule_versions (
+    rule_version_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    rule_code text NOT NULL,
+    version integer NOT NULL,
+    rule_name text NOT NULL,
+    priority integer NOT NULL,
+    enabled boolean NOT NULL,
+    condition_type text NOT NULL,
+    condition_snapshot jsonb DEFAULT '{}'::jsonb NOT NULL,
+    outcome text NOT NULL,
+    destination_code text,
+    reason_template text NOT NULL,
+    effective_start date NOT NULL,
+    effective_end date,
+    management_audit_event_id uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT workflow_rule_versions_effective_dates_check CHECK (((effective_end IS NULL) OR (effective_end >= effective_start)))
+);
+
+
+--
+-- Name: workflow_rules; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.workflow_rules (
+    rule_code text NOT NULL,
+    rule_name text NOT NULL,
+    priority integer NOT NULL,
+    enabled boolean DEFAULT true NOT NULL,
+    condition_type text NOT NULL,
+    outcome text NOT NULL,
+    destination_code text,
+    reason_template text NOT NULL,
+    effective_start date DEFAULT CURRENT_DATE NOT NULL,
+    effective_end date,
+    version integer DEFAULT 1 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT workflow_rules_effective_dates_check CHECK (((effective_end IS NULL) OR (effective_end >= effective_start)))
+);
+
+
+--
+-- Name: asset id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.asset ALTER COLUMN id SET DEFAULT nextval('public.asset_id_seq'::regclass);
+
+ALTER TABLE ONLY public.asset_custom ALTER COLUMN id SET DEFAULT nextval('public.asset_custom_id_seq'::regclass);
+
+
+--
+-- Name: actions actions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.actions
+    ADD CONSTRAINT actions_pkey PRIMARY KEY (action_id);
+
+
+--
+-- Name: asset asset_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.asset
+    ADD CONSTRAINT asset_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.asset_custom
+    ADD CONSTRAINT asset_custom_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: attachments attachments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.attachments
+    ADD CONSTRAINT attachments_pkey PRIMARY KEY (attachment_id);
+
+
+--
+-- Name: audit_runs audit_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_runs
+    ADD CONSTRAINT audit_runs_pkey PRIMARY KEY (run_id);
+
+
+--
+-- Name: audit_steps audit_steps_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_steps
+    ADD CONSTRAINT audit_steps_pkey PRIMARY KEY (step_id);
+
+
+--
+-- Name: audit_steps audit_steps_run_id_sequence_number_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_steps
+    ADD CONSTRAINT audit_steps_run_id_sequence_number_key UNIQUE (run_id, sequence_number);
+
+
+--
+-- Name: decisions decisions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.decisions
+    ADD CONSTRAINT decisions_pkey PRIMARY KEY (decision_id);
+
+
+--
+-- Name: document_items document_items_email_id_item_key_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.document_items
+    ADD CONSTRAINT document_items_email_id_item_key_key UNIQUE (email_id, item_key);
+
+
+--
+-- Name: document_items document_items_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.document_items
+    ADD CONSTRAINT document_items_pkey PRIMARY KEY (document_item_id);
+
+
+--
+-- Name: emails emails_idempotency_key_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emails
+    ADD CONSTRAINT emails_idempotency_key_key UNIQUE (idempotency_key);
+
+
+--
+-- Name: emails emails_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emails
+    ADD CONSTRAINT emails_pkey PRIMARY KEY (email_id);
+
+
+--
+-- Name: escalate_queue escalate_queue_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.escalate_queue
+    ADD CONSTRAINT escalate_queue_pkey PRIMARY KEY (escalate_id);
+
+
+--
+-- Name: extractions extractions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.extractions
+    ADD CONSTRAINT extractions_pkey PRIMARY KEY (extraction_id);
+
+
+--
+-- Name: invoices invoices_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.invoices
+    ADD CONSTRAINT invoices_pkey PRIMARY KEY (invoice_id);
+
+
+--
+-- Name: llm_interactions llm_interactions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.llm_interactions
+    ADD CONSTRAINT llm_interactions_pkey PRIMARY KEY (llm_interaction_id);
+
+
+--
+-- Name: management_audit_events management_audit_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.management_audit_events
+    ADD CONSTRAINT management_audit_events_pkey PRIMARY KEY (management_audit_event_id);
+
+
+--
+-- Name: no_action_email_patterns no_action_email_patterns_pattern_name_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.no_action_email_patterns
+    ADD CONSTRAINT no_action_email_patterns_pattern_name_key UNIQUE (pattern_name);
+
+
+--
+-- Name: no_action_email_patterns no_action_email_patterns_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.no_action_email_patterns
+    ADD CONSTRAINT no_action_email_patterns_pkey PRIMARY KEY (pattern_id);
+
+
+--
+-- Name: routing_destinations routing_destinations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.routing_destinations
+    ADD CONSTRAINT routing_destinations_pkey PRIMARY KEY (destination_code);
+
+
+--
+-- Name: runtime_config runtime_config_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.runtime_config
+    ADD CONSTRAINT runtime_config_pkey PRIMARY KEY (config_key);
+
+
+--
+-- Name: ownership uq_ownership; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ownership
+    ADD CONSTRAINT uq_ownership UNIQUE (ownership);
+
+
+--
+-- Name: workflow_rule_conditions workflow_rule_conditions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.workflow_rule_conditions
+    ADD CONSTRAINT workflow_rule_conditions_pkey PRIMARY KEY (condition_id);
+
+
+--
+-- Name: workflow_rule_conditions workflow_rule_conditions_rule_code_condition_key_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.workflow_rule_conditions
+    ADD CONSTRAINT workflow_rule_conditions_rule_code_condition_key_key UNIQUE (rule_code, condition_key);
+
+
+--
+-- Name: workflow_rule_versions workflow_rule_versions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.workflow_rule_versions
+    ADD CONSTRAINT workflow_rule_versions_pkey PRIMARY KEY (rule_version_id);
+
+
+--
+-- Name: workflow_rule_versions workflow_rule_versions_rule_code_version_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.workflow_rule_versions
+    ADD CONSTRAINT workflow_rule_versions_rule_code_version_key UNIQUE (rule_code, version);
+
+
+--
+-- Name: workflow_rules workflow_rules_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.workflow_rules
+    ADD CONSTRAINT workflow_rules_pkey PRIMARY KEY (rule_code);
+
+
+--
+-- Name: actions_document_item_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX actions_document_item_idx ON public.actions USING btree (document_item_id) WHERE (document_item_id IS NOT NULL);
+
+
+--
+-- Name: asset_address_trgm_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX asset_address_trgm_idx ON public.asset USING gin (lower(COALESCE(address, ''::text)) public.gin_trgm_ops);
+
+CREATE INDEX asset_custom_address_trgm_idx ON public.asset_custom USING gin (lower(COALESCE(address, ''::text)) public.gin_trgm_ops);
+
+CREATE INDEX asset_custom_alias_trgm_idx ON public.asset_custom USING gin (lower(regexp_replace((COALESCE(asset_alias, ''::character varying))::text, '[^a-zA-Z0-9]+'::text, ''::text, 'g'::text)) public.gin_trgm_ops);
+
+CREATE INDEX asset_custom_destination_code_idx ON public.asset_custom USING btree (destination_code);
+
+CREATE INDEX asset_custom_name_trgm_idx ON public.asset_custom USING gin (lower((COALESCE(asset_name, ''::character varying))::text) public.gin_trgm_ops);
+
+
+--
+-- Name: asset_alias_trgm_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX asset_alias_trgm_idx ON public.asset USING gin (lower(regexp_replace((COALESCE(asset_alias, ''::character varying))::text, '[^a-zA-Z0-9]+'::text, ''::text, 'g'::text)) public.gin_trgm_ops);
+
+
+--
+-- Name: asset_name_trgm_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX asset_name_trgm_idx ON public.asset USING gin (lower((COALESCE(asset_name, ''::character varying))::text) public.gin_trgm_ops);
+
+
+--
+-- Name: asset_ownership_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX asset_ownership_idx ON public.asset USING btree (ownership);
+
+
+--
+-- Name: asset_tenants_trgm_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX asset_tenants_trgm_idx ON public.asset USING gin (lower(COALESCE(tenants, ''::text)) public.gin_trgm_ops);
+
+CREATE OR REPLACE VIEW public.vw_asset_lookup AS
+ SELECT 'asset'::text AS asset_source,
+    ('asset:'::text || (a.id)::text) AS asset_lookup_id,
+    (a.id)::text AS source_id,
+    a.asset_alias,
+    a.asset_name,
+    a.address,
+    a.tenants,
+    a.asset_type,
+    a.ownership,
+    a.market_name,
+    a.market_area,
+    NULL::text AS comment,
+    o.destination AS destination_code,
+    rd.active AS destination_active,
+    a.created_at
+   FROM ((public.asset a
+     LEFT JOIN public.ownership o ON (((a.ownership)::text = (o.ownership)::text)))
+     LEFT JOIN public.routing_destinations rd ON ((rd.destination_code = o.destination)))
+UNION ALL
+ SELECT 'asset_custom'::text AS asset_source,
+    ('asset_custom:'::text || (ac.id)::text) AS asset_lookup_id,
+    (ac.id)::text AS source_id,
+    ac.asset_alias,
+    ac.asset_name,
+    ac.address,
+    NULL::text AS tenants,
+    NULL::character varying(100) AS asset_type,
+    NULL::character varying(255) AS ownership,
+    NULL::character varying(255) AS market_name,
+    NULL::character varying(255) AS market_area,
+    ac.comment,
+    (ac.destination_code)::text AS destination_code,
+    rd.active AS destination_active,
+    ac.created_at
+   FROM (public.asset_custom ac
+     LEFT JOIN public.routing_destinations rd ON ((rd.destination_code = (ac.destination_code)::text)));
+
+
+--
+-- Name: attachments_email_path_hash_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX attachments_email_path_hash_idx ON public.attachments USING btree (email_id, storage_path, sha256);
+
+
+--
+-- Name: decisions_document_item_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX decisions_document_item_idx ON public.decisions USING btree (document_item_id) WHERE (document_item_id IS NOT NULL);
+
+
+--
+-- Name: document_items_attachment_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX document_items_attachment_idx ON public.document_items USING btree (attachment_id) WHERE (attachment_id IS NOT NULL);
+
+
+--
+-- Name: document_items_email_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX document_items_email_idx ON public.document_items USING btree (email_id, created_at);
+
+
+--
+-- Name: escalate_queue_document_item_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX escalate_queue_document_item_idx ON public.escalate_queue USING btree (document_item_id) WHERE (document_item_id IS NOT NULL);
+
+
+--
+-- Name: escalate_queue_source_message_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX escalate_queue_source_message_id_idx ON public.escalate_queue USING btree (source_message_id) WHERE (source_message_id IS NOT NULL);
+
+
+--
+-- Name: extractions_document_item_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX extractions_document_item_idx ON public.extractions USING btree (document_item_id) WHERE (document_item_id IS NOT NULL);
+
+
+--
+-- Name: invoices_document_item_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX invoices_document_item_idx ON public.invoices USING btree (document_item_id) WHERE (document_item_id IS NOT NULL);
+
+
+--
+-- Name: invoices_fingerprint_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX invoices_fingerprint_idx ON public.invoices USING btree (duplicate_fingerprint);
+
+
+--
+-- Name: invoices_vendor_amount_date_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX invoices_vendor_amount_date_idx ON public.invoices USING btree (regexp_replace(lower(COALESCE(vendor_name, ''::text)), '\s+'::text, ' '::text, 'g'::text), amount, invoice_date);
+
+
+--
+-- Name: invoices_vendor_invoice_date_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX invoices_vendor_invoice_date_idx ON public.invoices USING btree (regexp_replace(lower(COALESCE(vendor_name, ''::text)), '\s+'::text, ' '::text, 'g'::text), regexp_replace(lower(COALESCE(invoice_number, ''::text)), '\s+'::text, ' '::text, 'g'::text), invoice_date);
+
+
+--
+-- Name: invoices_vendor_invoice_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX invoices_vendor_invoice_idx ON public.invoices USING btree (regexp_replace(lower(COALESCE(vendor_name, ''::text)), '\s+'::text, ' '::text, 'g'::text), regexp_replace(lower(COALESCE(invoice_number, ''::text)), '\s+'::text, ' '::text, 'g'::text));
+
+
+--
+-- Name: llm_interactions_extraction_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX llm_interactions_extraction_idx ON public.llm_interactions USING btree (extraction_id) WHERE (extraction_id IS NOT NULL);
+
+
+--
+-- Name: llm_interactions_run_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX llm_interactions_run_idx ON public.llm_interactions USING btree (run_id, created_at);
+
+
+--
+-- Name: llm_interactions_step_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX llm_interactions_step_idx ON public.llm_interactions USING btree (step_id) WHERE (step_id IS NOT NULL);
+
+
+--
+-- Name: management_audit_events_lookup_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX management_audit_events_lookup_idx ON public.management_audit_events USING btree (changed_table, changed_key, changed_at DESC);
+
+
+--
+-- Name: no_action_email_patterns_active_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX no_action_email_patterns_active_idx ON public.no_action_email_patterns USING btree (enabled, priority, effective_start, effective_end);
+
+
+--
+-- Name: ownership_destination_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ownership_destination_idx ON public.ownership USING btree (destination);
+
+
+--
+-- Name: workflow_rule_versions_lookup_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX workflow_rule_versions_lookup_idx ON public.workflow_rule_versions USING btree (rule_code, version);
+
+
+--
+-- Name: workflow_rules_active_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX workflow_rules_active_idx ON public.workflow_rules USING btree (enabled, priority, effective_start, effective_end);
+
+
+--
+-- Name: actions actions_decision_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.actions
+    ADD CONSTRAINT actions_decision_id_fkey FOREIGN KEY (decision_id) REFERENCES public.decisions(decision_id);
+
+
+--
+-- Name: actions actions_destination_code_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.actions
+    ADD CONSTRAINT actions_destination_code_fkey FOREIGN KEY (destination_code) REFERENCES public.routing_destinations(destination_code);
+
+
+--
+-- Name: actions actions_document_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.actions
+    ADD CONSTRAINT actions_document_item_id_fkey FOREIGN KEY (document_item_id) REFERENCES public.document_items(document_item_id) ON DELETE SET NULL;
+
+
+--
+-- Name: actions actions_email_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.actions
+    ADD CONSTRAINT actions_email_id_fkey FOREIGN KEY (email_id) REFERENCES public.emails(email_id) ON DELETE CASCADE;
+
+
+--
+-- Name: attachments attachments_email_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.attachments
+    ADD CONSTRAINT attachments_email_id_fkey FOREIGN KEY (email_id) REFERENCES public.emails(email_id) ON DELETE CASCADE;
+
+
+--
+-- Name: audit_runs audit_runs_email_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_runs
+    ADD CONSTRAINT audit_runs_email_id_fkey FOREIGN KEY (email_id) REFERENCES public.emails(email_id);
+
+
+--
+-- Name: audit_steps audit_steps_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_steps
+    ADD CONSTRAINT audit_steps_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.audit_runs(run_id) ON DELETE CASCADE;
+
+--
+-- Name: decisions decisions_destination_code_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.decisions
+    ADD CONSTRAINT decisions_destination_code_fkey FOREIGN KEY (destination_code) REFERENCES public.routing_destinations(destination_code);
+
+
+--
+-- Name: decisions decisions_document_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.decisions
+    ADD CONSTRAINT decisions_document_item_id_fkey FOREIGN KEY (document_item_id) REFERENCES public.document_items(document_item_id) ON DELETE SET NULL;
+
+
+--
+-- Name: decisions decisions_email_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.decisions
+    ADD CONSTRAINT decisions_email_id_fkey FOREIGN KEY (email_id) REFERENCES public.emails(email_id) ON DELETE CASCADE;
+
+
+--
+-- Name: decisions decisions_matched_rule_code_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.decisions
+    ADD CONSTRAINT decisions_matched_rule_code_fkey FOREIGN KEY (matched_rule_code) REFERENCES public.workflow_rules(rule_code);
+
+
+--
+-- Name: decisions decisions_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.decisions
+    ADD CONSTRAINT decisions_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.audit_runs(run_id);
+
+
+--
+-- Name: document_items document_items_attachment_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.document_items
+    ADD CONSTRAINT document_items_attachment_id_fkey FOREIGN KEY (attachment_id) REFERENCES public.attachments(attachment_id) ON DELETE SET NULL;
+
+
+--
+-- Name: document_items document_items_email_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.document_items
+    ADD CONSTRAINT document_items_email_id_fkey FOREIGN KEY (email_id) REFERENCES public.emails(email_id) ON DELETE CASCADE;
+
+
+--
+-- Name: escalate_queue escalate_queue_decision_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.escalate_queue
+    ADD CONSTRAINT escalate_queue_decision_id_fkey FOREIGN KEY (decision_id) REFERENCES public.decisions(decision_id);
+
+
+--
+-- Name: escalate_queue escalate_queue_document_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.escalate_queue
+    ADD CONSTRAINT escalate_queue_document_item_id_fkey FOREIGN KEY (document_item_id) REFERENCES public.document_items(document_item_id) ON DELETE SET NULL;
+
+
+--
+-- Name: escalate_queue escalate_queue_email_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.escalate_queue
+    ADD CONSTRAINT escalate_queue_email_id_fkey FOREIGN KEY (email_id) REFERENCES public.emails(email_id) ON DELETE CASCADE;
+
+
+--
+-- Name: extractions extractions_document_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.extractions
+    ADD CONSTRAINT extractions_document_item_id_fkey FOREIGN KEY (document_item_id) REFERENCES public.document_items(document_item_id) ON DELETE SET NULL;
+
+
+--
+-- Name: extractions extractions_email_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.extractions
+    ADD CONSTRAINT extractions_email_id_fkey FOREIGN KEY (email_id) REFERENCES public.emails(email_id) ON DELETE CASCADE;
+
+
+--
+-- Name: asset fk_asset_ownership; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.asset
+    ADD CONSTRAINT fk_asset_ownership FOREIGN KEY (ownership) REFERENCES public.ownership(ownership);
+
+
+--
+-- Name: ownership fk_ownership_destination; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ownership
+    ADD CONSTRAINT fk_ownership_destination FOREIGN KEY (destination) REFERENCES public.routing_destinations(destination_code);
+
+
+--
+-- Name: invoices invoices_document_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.invoices
+    ADD CONSTRAINT invoices_document_item_id_fkey FOREIGN KEY (document_item_id) REFERENCES public.document_items(document_item_id) ON DELETE SET NULL;
+
+
+--
+-- Name: invoices invoices_email_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.invoices
+    ADD CONSTRAINT invoices_email_id_fkey FOREIGN KEY (email_id) REFERENCES public.emails(email_id) ON DELETE CASCADE;
+
+
+--
+-- Name: llm_interactions llm_interactions_email_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.llm_interactions
+    ADD CONSTRAINT llm_interactions_email_id_fkey FOREIGN KEY (email_id) REFERENCES public.emails(email_id) ON DELETE CASCADE;
+
+
+--
+-- Name: llm_interactions llm_interactions_extraction_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.llm_interactions
+    ADD CONSTRAINT llm_interactions_extraction_id_fkey FOREIGN KEY (extraction_id) REFERENCES public.extractions(extraction_id) ON DELETE SET NULL;
+
+
+--
+-- Name: llm_interactions llm_interactions_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.llm_interactions
+    ADD CONSTRAINT llm_interactions_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.audit_runs(run_id) ON DELETE CASCADE;
+
+
+--
+-- Name: llm_interactions llm_interactions_step_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.llm_interactions
+    ADD CONSTRAINT llm_interactions_step_id_fkey FOREIGN KEY (step_id) REFERENCES public.audit_steps(step_id) ON DELETE SET NULL;
+
+
+--
+-- Name: workflow_rule_conditions workflow_rule_conditions_rule_code_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.workflow_rule_conditions
+    ADD CONSTRAINT workflow_rule_conditions_rule_code_fkey FOREIGN KEY (rule_code) REFERENCES public.workflow_rules(rule_code) ON DELETE CASCADE;
+
+
+--
+-- Name: workflow_rule_versions workflow_rule_versions_destination_code_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.workflow_rule_versions
+    ADD CONSTRAINT workflow_rule_versions_destination_code_fkey FOREIGN KEY (destination_code) REFERENCES public.routing_destinations(destination_code);
+
+
+--
+-- Name: workflow_rule_versions workflow_rule_versions_management_audit_event_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.workflow_rule_versions
+    ADD CONSTRAINT workflow_rule_versions_management_audit_event_id_fkey FOREIGN KEY (management_audit_event_id) REFERENCES public.management_audit_events(management_audit_event_id);
+
+
+--
+-- Name: workflow_rule_versions workflow_rule_versions_rule_code_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.workflow_rule_versions
+    ADD CONSTRAINT workflow_rule_versions_rule_code_fkey FOREIGN KEY (rule_code) REFERENCES public.workflow_rules(rule_code);
+
+
+--
+-- Name: workflow_rules workflow_rules_destination_code_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.workflow_rules
+    ADD CONSTRAINT workflow_rules_destination_code_fkey FOREIGN KEY (destination_code) REFERENCES public.routing_destinations(destination_code);
+
+
+--
+-- PostgreSQL database dump complete
+--
+
+\unrestrict jVhKTxV59XXm4MB1OCWI1jFUJKWD0cKqj9hc7UI3FKEbL86Md5WCBG2fP9dZ3QR

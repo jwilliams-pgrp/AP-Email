@@ -5,26 +5,54 @@ import {
   Activity,
   AlertTriangle,
   CheckCircle2,
+  ExternalLink,
   FileDown,
   FileSearch,
   Gauge,
   History,
   Mail,
+  Pencil,
+  Plus,
   RefreshCw,
   Save,
   Search,
   Settings2,
-  SlidersHorizontal,
+  Trash2,
+  X,
 } from "lucide-react";
 import "./styles.css";
 
-const API = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8001";
+const API =
+  import.meta.env.VITE_API_BASE ||
+  (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" ? "http://127.0.0.1:8001" : "");
 const THROUGHPUT_CATEGORIES = [
   ["automated", "Automated"],
-  ["review", "Review"],
+  ["escalate", "Escalate"],
   ["failed", "Failed"],
   ["filed", "Filed"],
 ];
+const API_HTML_RESPONSE_MESSAGE =
+  "Dashboard API returned HTML instead of JSON; verify the Static Web App is linked to the Function App backend.";
+
+async function readJsonResponse(res, fallbackMessage) {
+  const contentType = res.headers.get("Content-Type") || "";
+  const normalizedContentType = contentType.toLowerCase();
+  const isJson = normalizedContentType.includes("application/json") || normalizedContentType.includes("+json");
+  if (!isJson) {
+    const text = await res.text();
+    if (text.trimStart().startsWith("<!DOCTYPE") || normalizedContentType.includes("text/html")) {
+      throw new Error(API_HTML_RESPONSE_MESSAGE);
+    }
+    throw new Error(fallbackMessage || res.statusText || "Dashboard API returned a non-JSON response.");
+  }
+
+  const json = await res.json();
+  if (!res.ok) {
+    const detail = json.detail || res.statusText;
+    throw new Error(fallbackMessage && detail ? `${fallbackMessage} ${detail}` : detail || fallbackMessage || "Request failed.");
+  }
+  return json;
+}
 
 function useApi(path, fallback, deps = []) {
   const [data, setData] = useState(fallback);
@@ -37,8 +65,7 @@ function useApi(path, fallback, deps = []) {
     setError("");
     fetch(`${API}${path}`)
       .then(async (res) => {
-        if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
-        return res.json();
+        return readJsonResponse(res);
       })
       .then((json) => alive && setData(json))
       .catch((err) => alive && setError(err.message))
@@ -125,12 +152,10 @@ function Kpi({ label, value, sub, tone = "blue", icon: Icon = Activity }) {
 }
 
 function Monitor({ days, openEmail }) {
-  const [reviewRefresh, setReviewRefresh] = useState(0);
+  const [escalateRefresh] = useState(0);
   const summary = useApi(`/api/monitor/summary?days=${days}`, {}, [days]);
   const throughput = useApi(`/api/monitor/throughput?days=${days}`, [], [days]);
-  const reasons = useApi(`/api/monitor/review-reasons?days=${days}`, [], [days]);
-  const destinations = useApi(`/api/monitor/destinations?days=${days}`, [], [days]);
-  const reviewEmails = useApi(`/api/monitor/review-emails?limit=25&refresh=${reviewRefresh}`, [], [reviewRefresh]);
+  const escalateEmails = useApi(`/api/monitor/escalate-emails?limit=25&refresh=${escalateRefresh}`, [], [escalateRefresh]);
   const recent = useApi("/api/monitor/recent-runs?limit=20", [], [days]);
   const data = summary.data;
   const maxDay = Math.max(
@@ -138,19 +163,13 @@ function Monitor({ days, openEmail }) {
     ...throughput.data.map((row) => THROUGHPUT_CATEGORIES.reduce((sum, [key]) => sum + (row[key] || 0), 0)),
   );
 
-  async function completeReview(reviewId) {
-    const res = await fetch(`${API}/api/review-queue/${reviewId}/complete`, { method: "PATCH" });
-    if (!res.ok) throw new Error((await res.json()).detail || "Review completion failed.");
-    setReviewRefresh((value) => value + 1);
-  }
-
   return (
     <main className="workspace">
       {summary.error && <Banner tone="bad" text={summary.error} />}
       <div className="kpiGrid">
         <Kpi label="Processed" value={formatNumber(data.total_processed)} sub={`${days} day window`} icon={Mail} />
         <Kpi label="Automated" value={formatOutcomeMetric(data, "AUTO")} sub="auto routed" tone="green" icon={CheckCircle2} />
-        <Kpi label="Review" value={formatOutcomeMetric(data, "REVIEW")} sub={`${formatNumber(data.open_review_count)} open review items`} tone="amber" icon={AlertTriangle} />
+        <Kpi label="Escalate" value={formatOutcomeMetric(data, "ESCALATE")} sub={`${formatNumber(data.open_escalate_count)} open escalation items`} tone="amber" icon={AlertTriangle} />
         <Kpi label="Filed" value={formatOutcomeMetric(data, "FILE")} sub="filed locally" tone="blue" icon={History} />
         <Kpi label="Flagged" value={formatOutcomeMetric(data, "FLAG")} sub="critical or misdirected" tone="red" icon={AlertTriangle} />
         <Kpi label="Discarded" value={formatOutcomeMetric(data, "DISCARD")} sub="logged no-action emails" tone="blue" icon={Mail} />
@@ -185,12 +204,7 @@ function Monitor({ days, openEmail }) {
           </div>
         </section>
 
-        <TopList title="Top destinations" rows={destinations.data} labelKey="display_name" />
-      </div>
-
-      <div className="split">
-        <ReviewEmails rows={reviewEmails.data} openEmail={openEmail} completeReview={completeReview} />
-        <TopList title="Review reasons" rows={reasons.data} labelKey="reason" />
+        <EscalateEmails rows={escalateEmails.data} openEmail={openEmail} />
       </div>
 
       <section className="panel recentRuns">
@@ -214,35 +228,20 @@ function Monitor({ days, openEmail }) {
   );
 }
 
-function ReviewEmails({ rows, openEmail, completeReview }) {
-  const [error, setError] = useState("");
-
-  async function onComplete(event, reviewId) {
-    event.stopPropagation();
-    try {
-      setError("");
-      await completeReview(reviewId);
-    } catch (err) {
-      setError(err.message);
-    }
-  }
-
+function EscalateEmails({ rows, openEmail }) {
   return (
     <section className="panel">
-      <PanelTitle title="Review Emails" icon={AlertTriangle} />
-      {error && <Banner tone="bad" text={error} />}
-      <div className="reviewEmailList">
-        {rows.length === 0 && <Empty text="No outstanding review emails." />}
+      <PanelTitle title="Escalate Emails" icon={AlertTriangle} />
+      <div className="escalateEmailList">
+        {rows.length === 0 && <Empty text="No outstanding escalation emails." />}
         {rows.map((row) => (
-          <div className="reviewEmail" key={row.review_id}>
-            <button className="reviewEmailOpen" onClick={() => openEmail(row.email_id)}>
+          <div className="escalateEmail" key={row.escalate_id}>
+            <button className="escalateEmailOpen" onClick={() => openEmail(row.email_id)}>
               <strong>{row.subject || "No subject"}</strong>
               <small>{row.sender_name || row.sender_email || "Unknown sender"}</small>
               <small>{row.reason}</small>
             </button>
-            <button className="inlineAction" onClick={(event) => onComplete(event, row.review_id)}>
-              Complete
-            </button>
+            {row.office_web_link && <OpenPortalButton href={row.office_web_link} />}
           </div>
         ))}
       </div>
@@ -250,23 +249,12 @@ function ReviewEmails({ rows, openEmail, completeReview }) {
   );
 }
 
-function TopList({ title, rows, labelKey }) {
-  const max = Math.max(1, ...rows.map((row) => row.count || 0));
-  const className = title === "Review reasons" ? "panel reviewReasons" : "panel";
+function OpenPortalButton({ href, className = "" }) {
   return (
-    <section className={className}>
-      <PanelTitle title={title} />
-      <div className="topList">
-        {rows.length === 0 && <Empty text="No data yet." />}
-        {rows.map((row) => (
-          <div className="topItem" key={`${row[labelKey]}-${row.count}`}>
-            <span>{row[labelKey] || "Unknown"}</span>
-            <div><i style={{ width: `${((row.count || 0) / max) * 100}%` }} /></div>
-            <b>{row.count}</b>
-          </div>
-        ))}
-      </div>
-    </section>
+    <a className={`portalOpenButton ${className}`.trim()} href={href} target="_blank" rel="noreferrer">
+      <ExternalLink size={15} />
+      <span>Open</span>
+    </a>
   );
 }
 
@@ -276,7 +264,11 @@ function EmailDetail({ selectedEmailId, setSelectedEmailId }) {
   const results = useApi(searchPath, [], [searchPath]);
   const detail = useApi(selectedEmailId ? `/api/emails/${selectedEmailId}` : "/api/emails/search?limit=1", {}, [selectedEmailId]);
   const selected = selectedEmailId ? detail.data : null;
-  const firstRun = selected?.audit_runs?.[0]?.run_id;
+  const firstRun = useMemo(() => {
+    const runs = selected?.audit_runs || [];
+    const finalized = runs.find((run) => run.status === "completed" || run.status === "failed");
+    return (finalized || runs[0])?.run_id;
+  }, [selected]);
   const latestDecision = selected?.decisions?.[0];
 
   useEffect(() => {
@@ -312,6 +304,7 @@ function EmailDetail({ selectedEmailId, setSelectedEmailId }) {
           <>
             <section className="panel emailHeader">
               <PanelTitle title="Email" icon={Mail} />
+              {selected.email.office_web_link && <OpenPortalButton href={selected.email.office_web_link} className="emailHeaderOpen" />}
               <div className="emailSummary">
                 <div className="emailSummaryMain">
                   <strong>{selected.email.subject || "No subject"}</strong>
@@ -400,90 +393,500 @@ function AuditTrace({ runId }) {
   );
 }
 
-function Management() {
-  const [refresh, setRefresh] = useState(0);
-  const rules = useApi("/api/workflow/rules", [], [refresh]);
-  const destinations = useApi("/api/workflow/destinations", [], [refresh]);
-  const config = useApi("/api/workflow/runtime-config", [], [refresh]);
-  const audit = useApi("/api/workflow/audit-events", [], [refresh]);
-  const [editing, setEditing] = useState(null);
-  const [message, setMessage] = useState("");
+const OWNERSHIP_COLUMNS = [
+  { key: "ownership", label: "Ownership" },
+  { key: "destination", label: "Destination" },
+];
 
-  async function saveRule() {
-    setMessage("");
-    const body = {
-      enabled: editing.enabled,
-      priority: Number(editing.priority),
-      reason_template: editing.reason_template,
-      change_reason: "Local dashboard edit",
-    };
-    const res = await fetch(`${API}/api/workflow/rules/${editing.rule_code}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      setMessage((await res.json()).detail || "Save failed.");
+const ASSET_LOOKUP_COLUMNS = [
+  "Asset Name",
+  "Asset Alias",
+  "Address",
+  "Ownership",
+  "Destination Code",
+  "Destination Active",
+  "Asset Type",
+  "Market",
+  "Market Area",
+];
+
+const ASSET_CUSTOM_COLUMNS = [
+  { key: "asset_name", label: "Asset Name", required: true },
+  { key: "asset_alias", label: "Asset Alias" },
+  { key: "address", label: "Address" },
+  { key: "destination_code", label: "Routing Destination", required: true },
+  { key: "comment", label: "Comment" },
+];
+
+const EMPTY_OWNERSHIP_FORM = {
+  ownership: "",
+  destination: "",
+};
+
+const EMPTY_ASSET_CUSTOM_FORM = {
+  asset_name: "",
+  asset_alias: "",
+  address: "",
+  destination_code: "",
+  comment: "",
+};
+
+function Management() {
+  const [isProcessOn, setIsProcessOn] = useState(true);
+  const [ownershipRows, setOwnershipRows] = useState([]);
+  const [assetCustomRows, setAssetCustomRows] = useState([]);
+  const [destinations, setDestinations] = useState([]);
+  const [assetLookupRows, setAssetLookupRows] = useState([]);
+  const [ownershipLoading, setOwnershipLoading] = useState(true);
+  const [ownershipError, setOwnershipError] = useState("");
+  const [destinationLoading, setDestinationLoading] = useState(true);
+  const [destinationError, setDestinationError] = useState("");
+  const [assetCustomLoading, setAssetCustomLoading] = useState(true);
+  const [assetCustomError, setAssetCustomError] = useState("");
+  const [assetLookupLoading, setAssetLookupLoading] = useState(true);
+  const [assetLookupError, setAssetLookupError] = useState("");
+  const [ownershipMessage, setOwnershipMessage] = useState("");
+  const [search, setSearch] = useState("");
+  const [ownershipForm, setOwnershipForm] = useState(EMPTY_OWNERSHIP_FORM);
+  const [selectedOwnership, setSelectedOwnership] = useState("__new__");
+  const [assetCustomEditingId, setAssetCustomEditingId] = useState("");
+  const [assetCustomForm, setAssetCustomForm] = useState(EMPTY_ASSET_CUSTOM_FORM);
+  const [assetCustomMessage, setAssetCustomMessage] = useState("");
+
+  async function loadOwnership() {
+    setOwnershipLoading(true);
+    setOwnershipError("");
+    try {
+      const res = await fetch(`${API}/api/workflow/ownership`);
+      setOwnershipRows(await readJsonResponse(res, "Failed to load ownership."));
+    } catch (err) {
+      setOwnershipError(err.message);
+    } finally {
+      setOwnershipLoading(false);
+    }
+  }
+
+  async function loadDestinations() {
+    setDestinationLoading(true);
+    setDestinationError("");
+    try {
+      const res = await fetch(`${API}/api/workflow/destinations`);
+      setDestinations(await readJsonResponse(res, "Failed to load destinations."));
+    } catch (err) {
+      setDestinationError(err.message);
+    } finally {
+      setDestinationLoading(false);
+    }
+  }
+
+  async function loadAssetCustom() {
+    setAssetCustomLoading(true);
+    setAssetCustomError("");
+    try {
+      const res = await fetch(`${API}/api/workflow/asset-custom`);
+      setAssetCustomRows(await readJsonResponse(res, "Failed to load custom assets."));
+    } catch (err) {
+      setAssetCustomError(err.message);
+    } finally {
+      setAssetCustomLoading(false);
+    }
+  }
+
+  async function loadAssetLookup() {
+    setAssetLookupLoading(true);
+    setAssetLookupError("");
+    try {
+      const res = await fetch(`${API}/api/workflow/asset-lookup`);
+      setAssetLookupRows(await readJsonResponse(res, "Failed to load asset lookup."));
+    } catch (err) {
+      setAssetLookupError(err.message);
+    } finally {
+      setAssetLookupLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadOwnership();
+    loadDestinations();
+    loadAssetCustom();
+    loadAssetLookup();
+  }, []);
+
+  const distinctDestinations = useMemo(() => {
+    const seen = new Set();
+    return destinations
+      .filter((row) => {
+        const code = row.destination_code || "";
+        if (!code || seen.has(code)) return false;
+        seen.add(code);
+        return true;
+      })
+      .sort((a, b) => String(a.destination_code).localeCompare(String(b.destination_code)));
+  }, [destinations]);
+
+  const ownershipOptions = useMemo(() => {
+    return [...ownershipRows].sort((a, b) => String(a.ownership || "").localeCompare(String(b.ownership || "")));
+  }, [ownershipRows]);
+
+  function onOwnershipFormChange(field, value) {
+    setOwnershipForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function selectOwnership(value) {
+    setSelectedOwnership(value);
+    setOwnershipMessage("");
+    if (value === "__new__") {
+      setOwnershipForm(EMPTY_OWNERSHIP_FORM);
       return;
     }
-    setEditing(null);
-    setRefresh((value) => value + 1);
+    const row = ownershipRows.find((item) => item.ownership === value);
+    if (!row) return;
+    setOwnershipForm({
+      ownership: row.ownership || "",
+      destination: row.destination || "",
+    });
   }
+
+  async function onOwnershipSubmit(event) {
+    event.preventDefault();
+    const isNew = selectedOwnership === "__new__";
+    const record = {
+      ownership: ownershipForm.ownership.trim(),
+      destination: ownershipForm.destination.trim(),
+    };
+    if (!record.ownership || !record.destination) return;
+    try {
+      setOwnershipError("");
+      setOwnershipMessage("");
+      const path = isNew
+        ? "/api/workflow/ownership"
+        : `/api/workflow/ownership/${encodeURIComponent(record.ownership)}`;
+      const res = await fetch(`${API}${path}`, {
+        method: isNew ? "POST" : "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ destination: record.destination }),
+      });
+      await readJsonResponse(res, "Failed to save ownership.");
+      await loadOwnership();
+      if (isNew) {
+        setOwnershipForm(EMPTY_OWNERSHIP_FORM);
+        setSelectedOwnership("__new__");
+      }
+      setOwnershipMessage(isNew ? "Ownership record added." : "Ownership destination updated.");
+    } catch (err) {
+      setOwnershipError(err.message);
+    }
+  }
+
+  function startAssetCustomAdd() {
+    setAssetCustomEditingId("__new__");
+    setAssetCustomForm(EMPTY_ASSET_CUSTOM_FORM);
+    setAssetCustomMessage("");
+  }
+
+  function startAssetCustomEdit(row) {
+    setAssetCustomEditingId(row.asset_custom_id);
+    setAssetCustomForm({
+      asset_name: row.asset_name || "",
+      asset_alias: row.asset_alias || "",
+      address: row.address || "",
+      destination_code: row.destination_code || "",
+      comment: row.comment || "",
+    });
+    setAssetCustomMessage("");
+  }
+
+  function cancelAssetCustomEdit() {
+    setAssetCustomEditingId("");
+    setAssetCustomForm(EMPTY_ASSET_CUSTOM_FORM);
+  }
+
+  function onAssetCustomFormChange(field, value) {
+    setAssetCustomForm((current) => ({ ...current, [field]: value }));
+  }
+
+  async function saveAssetCustom() {
+    const record = {
+      asset_name: assetCustomForm.asset_name.trim(),
+      asset_alias: assetCustomForm.asset_alias.trim(),
+      address: assetCustomForm.address.trim(),
+      destination_code: assetCustomForm.destination_code.trim(),
+      comment: assetCustomForm.comment.trim(),
+    };
+    if (!record.asset_name || !record.destination_code) return;
+    const isNew = assetCustomEditingId === "__new__";
+    const path = isNew
+      ? "/api/workflow/asset-custom"
+      : `/api/workflow/asset-custom/${encodeURIComponent(assetCustomEditingId)}`;
+    try {
+      setAssetCustomError("");
+      setAssetCustomMessage("");
+      const res = await fetch(`${API}${path}`, {
+        method: isNew ? "POST" : "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(record),
+      });
+      await readJsonResponse(res, "Failed to save custom asset.");
+      cancelAssetCustomEdit();
+      await Promise.all([loadAssetCustom(), loadAssetLookup()]);
+      setAssetCustomMessage(isNew ? "Custom asset added." : "Custom asset updated.");
+    } catch (err) {
+      setAssetCustomError(err.message);
+    }
+  }
+
+  async function deleteAssetCustom(row) {
+    if (!window.confirm(`Delete custom asset "${row.asset_name}"?`)) return;
+    try {
+      setAssetCustomError("");
+      setAssetCustomMessage("");
+      const res = await fetch(`${API}/api/workflow/asset-custom/${encodeURIComponent(row.asset_custom_id)}`, {
+        method: "DELETE",
+      });
+      await readJsonResponse(res, "Failed to delete custom asset.");
+      await Promise.all([loadAssetCustom(), loadAssetLookup()]);
+      setAssetCustomMessage("Custom asset deleted.");
+    } catch (err) {
+      setAssetCustomError(err.message);
+    }
+  }
+
+  function renderAssetCustomCell(column, row) {
+    const editing = assetCustomEditingId === row.asset_custom_id;
+    if (!editing) return row[column.key] || "-";
+    if (column.key === "destination_code") {
+      return (
+        <select
+          required
+          value={assetCustomForm.destination_code}
+          onChange={(event) => onAssetCustomFormChange("destination_code", event.target.value)}
+          disabled={destinationLoading || Boolean(destinationError)}
+        >
+          <option value="">Select destination</option>
+          {distinctDestinations.map((destination) => (
+            <option key={destination.destination_code} value={destination.destination_code}>{destination.destination_code}</option>
+          ))}
+        </select>
+      );
+    }
+    return (
+      <input
+        required={column.required}
+        value={assetCustomForm[column.key]}
+        onChange={(event) => onAssetCustomFormChange(column.key, event.target.value)}
+      />
+    );
+  }
+
+  const filteredAssets = useMemo(() => {
+    const normalized = search.trim().toLowerCase();
+    if (!normalized) return assetLookupRows;
+    return assetLookupRows.filter((row) =>
+      Object.values(row).some((value) => String(value ?? "").toLowerCase().includes(normalized)),
+    );
+  }, [assetLookupRows, search]);
 
   return (
     <main className="workspace">
-      <div className="toolbar">
-        <div>
-          <h1>Workflow management</h1>
-          <p>Local table-driven rules, destinations, runtime config, and management audit history.</p>
+      <section className="panel processTogglePanel">
+        <div className="processToggleHeader">
+          <div>
+            <h1>Process control</h1>
+            <p>UI-only process switch for local management preview.</p>
+          </div>
+          <div className="processSwitch" role="group" aria-label="Process on off toggle">
+            <button className={isProcessOn ? "active on" : ""} onClick={() => setIsProcessOn(true)} type="button">On</button>
+            <button className={!isProcessOn ? "active off" : ""} onClick={() => setIsProcessOn(false)} type="button">Off</button>
+          </div>
         </div>
-      </div>
-      {message && <Banner tone="bad" text={message} />}
-      <div className="managementGrid">
-        <section className="panel wide">
-          <PanelTitle title="Workflow rules" icon={SlidersHorizontal} />
-          <div className="ruleList">
-            {rules.data.map((rule) => (
-              <button key={rule.rule_code} className="ruleRow" onClick={() => setEditing(rule)}>
-                <span><Badge label={rule.enabled ? "enabled" : "disabled"} /> {rule.priority}</span>
-                <strong>{rule.rule_name}</strong>
-                <small>{rule.rule_code} · v{rule.version} · {rule.outcome}</small>
-              </button>
+        <Badge label={isProcessOn ? "ON" : "OFF"} />
+      </section>
+
+      <section className="panel propertyEditor">
+        <PanelTitle title="Manage Ownership" icon={Plus} />
+        {ownershipError && <Banner tone="bad" text={ownershipError} />}
+        {destinationError && <Banner tone="bad" text={destinationError} />}
+        {ownershipMessage && <Banner text={ownershipMessage} />}
+        <form className="propertyForm" onSubmit={onOwnershipSubmit}>
+          <div className="propertyFormGrid">
+            {OWNERSHIP_COLUMNS.map((column) => (
+              <label key={column.key}>
+                {column.label}
+                {column.key === "ownership" ? (
+                  <>
+                    <select value={selectedOwnership} onChange={(event) => selectOwnership(event.target.value)}>
+                      <option value="__new__">+ New</option>
+                      {ownershipOptions.map((row) => (
+                        <option key={row.ownership} value={row.ownership}>{row.ownership}</option>
+                      ))}
+                    </select>
+                    <input
+                      required
+                      value={ownershipForm.ownership}
+                      onChange={(event) => onOwnershipFormChange("ownership", event.target.value)}
+                      placeholder="New ownership"
+                      disabled={selectedOwnership !== "__new__"}
+                    />
+                  </>
+                ) : column.key === "destination" ? (
+                  <select
+                    required
+                    value={ownershipForm.destination}
+                    onChange={(event) => onOwnershipFormChange("destination", event.target.value)}
+                    disabled={destinationLoading || Boolean(destinationError)}
+                  >
+                    <option value="">Select destination</option>
+                    {distinctDestinations.map((row) => (
+                      <option key={row.destination_code} value={row.destination_code}>{row.destination_code}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input required value={ownershipForm[column.key]} onChange={(event) => onOwnershipFormChange(column.key, event.target.value)} />
+                )}
+              </label>
             ))}
           </div>
-        </section>
-        <section className="panel">
-          <PanelTitle title="Edit rule" icon={Save} />
-          {editing ? (
-            <div className="editForm">
-              <label>Enabled<input type="checkbox" checked={editing.enabled} onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })} /></label>
-              <label>Priority<input value={editing.priority} onChange={(e) => setEditing({ ...editing, priority: e.target.value })} /></label>
-              <label>Reason template<textarea value={editing.reason_template} onChange={(e) => setEditing({ ...editing, reason_template: e.target.value })} /></label>
-              <button onClick={saveRule}><Save size={16} />Save audited version</button>
-            </div>
-          ) : <Empty text="Select a rule to edit." />}
-        </section>
-      </div>
-
-      <div className="split">
-        <section className="panel">
-          <PanelTitle title="Destinations" />
-          <div className="compactList">
-            {destinations.data.map((row) => <span key={row.destination_code}>{row.destination_code}<small>{row.display_name}</small></span>)}
+          <div className="propertyFormActions">
+            <button type="submit" className="primaryAction" disabled={destinationLoading || Boolean(destinationError)}>
+              <Plus size={16} />
+              {selectedOwnership === "__new__" ? "Add Ownership" : "Save Destination"}
+            </button>
           </div>
-        </section>
-        <section className="panel">
-          <PanelTitle title="Runtime config" />
-          <div className="compactList">
-            {config.data.map((row) => <span key={row.config_key}>{row.config_key}<small>{JSON.stringify(row.config_value)}</small></span>)}
-          </div>
-        </section>
-      </div>
+        </form>
 
-      <section className="panel">
-        <PanelTitle title="Management audit history" />
-        <div className="compactList">
-          {audit.data.map((row) => <span key={row.management_audit_event_id}>{row.changed_table} · {row.changed_key}<small>{row.change_type} · {row.changed_at}</small></span>)}
+        <div className="propertyTableWrap">
+          <table className="propertyTable ownershipTable">
+            <thead>
+              <tr>
+                {OWNERSHIP_COLUMNS.map((column) => (
+                  <th key={column.key}>{column.label}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {ownershipLoading && (
+                <tr><td colSpan={OWNERSHIP_COLUMNS.length}><Empty text="Loading ownership..." /></td></tr>
+              )}
+              {!ownershipLoading && ownershipRows.length === 0 && (
+                <tr><td colSpan={OWNERSHIP_COLUMNS.length}><Empty text="No ownership records found." /></td></tr>
+              )}
+              {ownershipRows.map((row) => (
+                <tr key={row.ownership}>
+                  {OWNERSHIP_COLUMNS.map((column) => (
+                    <td key={column.key}>{row[column.key] || "-"}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel propertyTablePanel">
+        <div className="propertyTableHeader">
+          <PanelTitle title="Asset Custom" icon={Plus} />
+          <button type="button" className="primaryAction compactAction" onClick={startAssetCustomAdd} disabled={assetCustomEditingId === "__new__"}>
+            <Plus size={16} />
+            Add
+          </button>
+        </div>
+        {assetCustomError && <Banner tone="bad" text={assetCustomError} />}
+        {destinationError && <Banner tone="bad" text={destinationError} />}
+        {assetCustomMessage && <Banner text={assetCustomMessage} />}
+        <div className="propertyTableWrap">
+          <table className="propertyTable assetCustomTable">
+            <thead>
+              <tr>
+                {ASSET_CUSTOM_COLUMNS.map((column) => (
+                  <th key={column.key}>{column.label}</th>
+                ))}
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {assetCustomLoading && (
+                <tr><td colSpan={ASSET_CUSTOM_COLUMNS.length + 1}><Empty text="Loading custom assets..." /></td></tr>
+              )}
+              {!assetCustomLoading && assetCustomEditingId !== "__new__" && assetCustomRows.length === 0 && (
+                <tr><td colSpan={ASSET_CUSTOM_COLUMNS.length + 1}><Empty text="No custom assets found." /></td></tr>
+              )}
+              {assetCustomEditingId === "__new__" && (
+                <tr>
+                  {ASSET_CUSTOM_COLUMNS.map((column) => (
+                    <td key={column.key}>{renderAssetCustomCell(column, { asset_custom_id: "__new__" })}</td>
+                  ))}
+                  <td>
+                    <div className="rowActions">
+                      <button type="button" onClick={saveAssetCustom} title="Save" disabled={destinationLoading || Boolean(destinationError)}><Save size={15} />Save</button>
+                      <button type="button" onClick={cancelAssetCustomEdit} title="Cancel"><X size={15} />Cancel</button>
+                    </div>
+                  </td>
+                </tr>
+              )}
+              {assetCustomRows.map((row) => {
+                const editing = assetCustomEditingId === row.asset_custom_id;
+                return (
+                  <tr key={row.asset_custom_id}>
+                    {ASSET_CUSTOM_COLUMNS.map((column) => (
+                      <td key={column.key}>{renderAssetCustomCell(column, row)}</td>
+                    ))}
+                    <td>
+                      <div className="rowActions">
+                        {editing ? (
+                          <>
+                            <button type="button" onClick={saveAssetCustom} title="Save" disabled={destinationLoading || Boolean(destinationError)}><Save size={15} />Save</button>
+                            <button type="button" onClick={cancelAssetCustomEdit} title="Cancel"><X size={15} />Cancel</button>
+                          </>
+                        ) : (
+                          <>
+                            <button type="button" onClick={() => startAssetCustomEdit(row)} title="Edit"><Pencil size={15} />Edit</button>
+                            <button type="button" className="danger" onClick={() => deleteAssetCustom(row)} title="Delete"><Trash2 size={15} />Delete</button>
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel propertyTablePanel">
+        <div className="propertyTableHeader">
+          <PanelTitle title="Asset Lookup" />
+          <div className="search">
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search assets" />
+          </div>
+        </div>
+
+        {assetLookupError && <Banner tone="bad" text={assetLookupError} />}
+        <div className="propertyTableWrap">
+          <table className="propertyTable">
+            <thead>
+              <tr>
+                {ASSET_LOOKUP_COLUMNS.map((column) => (
+                  <th key={column}>{column}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {assetLookupLoading && (
+                <tr><td colSpan={ASSET_LOOKUP_COLUMNS.length}><Empty text="Loading asset lookup..." /></td></tr>
+              )}
+              {!assetLookupLoading && filteredAssets.length === 0 && (
+                <tr><td colSpan={ASSET_LOOKUP_COLUMNS.length}><Empty text="No assets found." /></td></tr>
+              )}
+              {filteredAssets.map((row, index) => (
+                <tr key={`${row["Asset Alias"] || row["Asset Name"] || "asset"}-${index}`}>
+                  {ASSET_LOOKUP_COLUMNS.map((column) => (
+                    <td key={column}>{typeof row[column] === "boolean" ? (row[column] ? "Yes" : "No") : row[column] || "-"}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </section>
     </main>

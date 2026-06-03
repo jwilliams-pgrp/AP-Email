@@ -1,6 +1,6 @@
 # Database Setup
 
-See `db/SCHEMA.md` for the full table-by-table and field-by-field data dictionary. Any schema change must update that file in the same change.
+See `db/SCHEMA.md` for the canonical data dictionary. Any schema change must update that file in the same change.
 
 Local database:
 
@@ -8,39 +8,69 @@ Local database:
 - user: `postgres`
 - host: `localhost`
 
-Set the password in the current shell before running commands:
+If your local Postgres requires a password, set it in the current shell before running commands. Do not commit real passwords:
 
 ```powershell
-$env:PGPASSWORD='llamas'
+$env:PGPASSWORD='<local-postgres-password>'
 ```
 
-Apply schema and core seed:
+Apply the replayable schema and seed baselines:
 
 ```powershell
 psql -h localhost -U postgres -d apautomation -v ON_ERROR_STOP=1 -f db\schema.sql
 psql -h localhost -U postgres -d apautomation -v ON_ERROR_STOP=1 -f db\seed.sql
 ```
 
-The core seed sets the default high-dollar invoice policy to file invoices over `amount_review_threshold` to the local lien release folder for hold.
+`db/schema.sql` is the full replayable DDL baseline exported from local Postgres. `db/seed.sql` seeds canonical `asset` and `ownership` rows exported from the live local `apautomation` database, plus local workflow rules, destinations, runtime config, and no-action patterns. Management-maintained `asset_custom` rows are not deleted or reseeded by `seed.sql`. One-time SQL files are not part of the current baseline; accepted changes must be folded back into `schema.sql` and/or `seed.sql`.
 
-Import the Medius routing workbook:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File db\import-reference-workbook.ps1 -WorkbookPath 'reference\Medius Routing.xlsx' -Database apautomation -User postgres -HostName localhost
-```
-
-Resolve imported route hints to final destination codes:
+Regenerate the local schema baseline from the canonical local database:
 
 ```powershell
-psql -h localhost -U postgres -d apautomation -v ON_ERROR_STOP=1 -f db\resolve-property-routes.sql
+$env:PGPASSWORD='<local-postgres-password>'
+pg_dump -h localhost -U postgres -d apautomation --schema=public --schema-only --no-owner --no-privileges --file db\schema.sql
 ```
 
-The schema, seed, workbook import, and route-resolution scripts are idempotent. The workbook import upserts source rows and reference-derived properties, aliases, and route hints.
+Regenerate `db/seed.sql` from workflow/reference/config tables only. Do not include operational or sensitive tables such as `emails`, `attachments`, `invoices`, `extractions`, `decisions`, `actions`, `audit_runs`, `audit_steps`, `llm_interactions`, artifact records, queue entries, or history records.
 
-Run local reference test emails:
+Deploy the nonprod Azure Postgres baseline:
 
 ```powershell
-.\run-local-test-emails.ps1
+.\deploy-azure-postgres-nonprod.ps1 `
+  -Subscription '<subscription-id-or-name>' `
+  -ResourceGroup 'rg-hw-propertiesapmail-nonprod' `
+  -PostgresServer 'psql-hw-propertiesapmail-nonprod' `
+  -DatabaseName 'apautomation' `
+  -AdminUser '<entra-admin-user>' `
+  -FunctionIdentityName 'id-hw-propertiesapmail-nonprod'
 ```
 
-The script runs the CLI in `APP_ENV=LOCAL` and `DRY_RUN=true`, uses `reference\test_emails`, and passes `--codex-skip-git-repo-check` for local workspaces that are not Git repositories.
+The deploy script acquires an Azure PostgreSQL Entra token, creates the database if needed, applies `db/schema.sql`, `db/seed.sql`, and `db/azure-permissions.sql`, then prints verification counts for key workflow/reference tables.
+
+Optional quick verification after seeding:
+
+```sql
+select count(*) as assets from asset;
+select ownership, destination from ownership order by ownership;
+select asset_alias, asset_name, ownership, asset_type, address
+from asset
+order by asset_alias nulls last, asset_name
+limit 20;
+select asset_source, asset_lookup_id, asset_alias, asset_name, destination_code
+from vw_asset_lookup
+order by asset_source, asset_name
+limit 20;
+select config_key, config_value from runtime_config where config_key like 'property_match_%' order by config_key;
+```
+
+Generated live-database visibility artifacts are in `db/introspection/`:
+
+- `schema-only.sql`
+- `asset.schema.sql`
+- `ownership.schema.sql`
+- `asset-ownership.data.sql`
+
+Run local processing from Graph Intake:
+
+```powershell
+python -m ap_automation.cli --source-intake --codex-skip-git-repo-check
+```

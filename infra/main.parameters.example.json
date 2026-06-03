@@ -1,0 +1,81 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "NONPROD"
+    },
+    "location": {
+      "value": "southcentralus"
+    },
+    "logicAppLocation": {
+      "value": "northcentralus"
+    },
+    "staticWebAppName": {
+      "value": "swa-example-nonprod"
+    },
+    "appServicePlanName": {
+      "value": "ASP-example-nonprod-0000"
+    },
+    "functionAppName": {
+      "value": "func-example-nonprod"
+    },
+    "functionIdentityName": {
+      "value": "id-example-nonprod"
+    },
+    "appInsightsName": {
+      "value": "appi-example-nonprod"
+    },
+    "logAnalyticsWorkspaceName": {
+      "value": "law-example-nonprod"
+    },
+    "functionStorageAccountName": {
+      "value": "stfuncexamplenonprod"
+    },
+    "artifactStorageAccountName": {
+      "value": "startifactexamplenp"
+    },
+    "keyVaultName": {
+      "value": "kv-example-nonprod"
+    },
+    "postgresServerName": {
+      "value": "pg-example-nonprod"
+    },
+    "logicAppName": {
+      "value": "lga-example-nonprod"
+    },
+    "foundryAccountName": {
+      "value": "fdnry-example-nonprod"
+    },
+    "foundryProjectName": {
+      "value": "proj-default"
+    },
+    "entraAdminObjectId": {
+      "value": "00000000-0000-0000-0000-000000000000"
+    },
+    "entraAdminName": {
+      "value": "replace-with-entra-admin-display-name"
+    },
+    "azureOpenAiDeployment": {
+      "value": "replace-with-deployment-name"
+    },
+    "documentIntelligenceEndpoint": {
+      "value": "https://fdnry-example-nonprod.cognitiveservices.azure.com"
+    },
+    "mailboxUserPrincipalName": {
+      "value": "ap-intake@example.com"
+    },
+    "teamsTeamNamePropertiesAp": {
+      "value": "replace-with-teams-team-name"
+    },
+    "teamsChannelNamePropertiesAp": {
+      "value": "replace-with-teams-channel-name"
+    },
+    "intakePollingIntervalSeconds": {
+      "value": 30
+    },
+    "intakeConcurrencyRuns": {
+      "value": 1
+    }
+  }
+}

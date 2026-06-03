@@ -1,0 +1,91 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "PROD"
+    },
+    "location": {
+      "value": "southcentralus"
+    },
+    "logicAppLocation": {
+      "value": "northcentralus"
+    },
+    "staticWebAppName": {
+      "value": "swa-hw-propertiesapmail-prod"
+    },
+    "appServicePlanName": {
+      "value": "ASP-rghwpropertiesapmailprod-9030"
+    },
+    "functionAppName": {
+      "value": "hw-propertiesapmail-prod"
+    },
+    "functionIdentityName": {
+      "value": "id-hw-propertiesapmail-prod"
+    },
+    "appInsightsName": {
+      "value": "hw-propertiesapmail-prod"
+    },
+    "logAnalyticsWorkspaceName": {
+      "value": "law-hw-propertiesapmail-prod"
+    },
+    "functionStorageAccountName": {
+      "value": "rghwpropertiesapmailprod"
+    },
+    "artifactStorageAccountName": {
+      "value": "hwpropapsaprod"
+    },
+    "keyVaultName": {
+      "value": "kv-hw-propapmail-prod"
+    },
+    "postgresServerName": {
+      "value": "pg-hw-propertiesapmail-prod"
+    },
+    "logicAppName": {
+      "value": "lga-hw-propertiesapmail-prod"
+    },
+    "foundryAccountName": {
+      "value": "fdnry-hw-propertiesapmail-prod"
+    },
+    "foundryProjectName": {
+      "value": "proj-default"
+    },
+    "entraAdminObjectId": {
+      "value": "00000000-0000-0000-0000-000000000000"
+    },
+    "entraAdminName": {
+      "value": "replace-with-entra-admin-display-name"
+    },
+    "azureOpenAiDeployment": {
+      "value": "replace-with-deployment-name"
+    },
+    "documentIntelligenceEndpoint": {
+      "value": "https://fdnry-hw-propertiesapmail-prod.cognitiveservices.azure.com"
+    },
+    "mailboxUserPrincipalName": {
+      "value": "replace-with-ap-intake-mailbox-upn"
+    },
+    "teamsTeamNamePropertiesAp": {
+      "value": "replace-with-teams-team-name"
+    },
+    "teamsChannelNamePropertiesAp": {
+      "value": "replace-with-teams-channel-name"
+    },
+    "intakePollingIntervalSeconds": {
+      "value": 30
+    },
+    "intakeConcurrencyRuns": {
+      "value": 1
+    },
+    "processGraphIntake": {
+      "value": false
+    },
+    "tags": {
+      "value": {
+        "environment": "PROD",
+        "resource-group": "rg0hw-propertiesapmail-prod",
+        "workload": "properties-ap-mail"
+      }
+    }
+  }
+}

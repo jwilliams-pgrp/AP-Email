@@ -1,0 +1,19 @@
+# This is a Declarative Automation Bundle definition for AP-Email.
+# The Databricks extension requires databricks.yml configuration file.
+# See https://docs.databricks.com/dev-tools/bundles/index.html for documentation.
+
+bundle:
+  name: AP-Email
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://adb-2586509042982560.0.azuredatabricks.net
+
+  ## Optionally, there could be 'staging' or 'prod' targets here.
+  #
+  # prod:
+  #   workspace:
+  #     host: https://adb-2586509042982560.0.azuredatabricks.net

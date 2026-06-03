@@ -2,14 +2,14 @@
 
 ## Purpose
 
-Define the local React web app used by business users and implementers to monitor AP inbox processing, search processed emails, inspect audit traces, and manage local workflow configuration.
+Define the React operations dashboard used by business users and implementers to monitor AP inbox processing, search processed emails, inspect audit traces, and manage workflow configuration.
 
-This app is local-first. It reads from the local Postgres database and local artifact storage created by the processing pipeline.
+This app supports both `LOCAL` development runtime and Azure hosted runtime. In Azure, the app is hosted by Azure Static Web Apps with Microsoft Entra SSO.
 
 ## Users
 
-- Business monitors who need to understand volume, automation health, review work, and errors.
-- AP reviewers who need to find a specific email and understand why it was routed, filed, flagged, discarded, or sent to review.
+- Business monitors who need to understand volume, automation health, ESCALATE work, and errors.
+- AP ESCALATEers who need to find a specific email and understand why it was routed, filed, flagged, discarded, or sent to ESCALATE.
 - System maintainers who need to inspect trace artifacts and workflow rule behavior.
 
 ## App Structure
@@ -35,26 +35,26 @@ Content plan:
 Interaction thesis:
 - Page switching should feel immediate and preserve filter/search context.
 - Drill-in interactions should move from metric, queue row, or search result to a specific email detail view.
-- Management edits should use explicit review/confirm flows before saving local database changes.
+- Management edits should use explicit ESCALATE/confirm flows before saving local database changes.
 
 ## Monitor Page Requirements
 
 The monitor page must show high-level business monitoring metrics:
 - total processed emails
 - automation rate
-- review rate
+- ESCALATE rate
 - file rate
 - flag rate
 - discard rate
 - error or failed-run rate
-- open review queue count
+- current ESCALATE folder email count
 - duplicate candidate count when available
 - average processing duration when available
 - confidence distribution
-- top review reasons
+- top ESCALATE reasons
 - top routing destinations
-- trended daily throughput as a stacked bar chart for automated, review, failed, and filed categories
-- open review emails requiring business-user completion
+- trended daily throughput as a stacked bar chart for automated, ESCALATE, failed, and filed categories
+- ESCALATE emails currently present in the mailbox `ESCALATE` folder
 - recent audit events or processing runs
 
 The monitor page must support:
@@ -63,10 +63,10 @@ The monitor page must support:
 - outcome filtering
 - clicking metric segments, queue rows, or recent events to drill into matching email records
 - clear distinction between completed, failed, and in-progress audit runs
-- a `Review Emails` section that lists outstanding review queue items and keeps them visible until a business user completes the review
+- a `ESCALATE Emails` section that lists the informational live mirror of messages currently in the mailbox `ESCALATE` folder
 - the primary KPI metrics in a single desktop row when viewport width allows
-- review reason labels with enough horizontal room to read long reasons without truncating the useful text
-- the `Review Emails` list constrained to roughly five visible rows with internal scrolling for longer queues
+- ESCALATE reason labels with enough horizontal room to read long reasons without truncating the useful text
+- the `ESCALATE Emails` list constrained to roughly five visible rows with internal scrolling for longer queues
 - explicit empty states when no local processing data exists
 
 ## Email Detail Page Requirements
@@ -82,13 +82,15 @@ The detail page must support searching for a specific email by:
 
 For a selected email, the page must show:
 - email metadata from `emails`
+- the Microsoft Office web link when the email was ingested from Graph and the link was captured
+- Open actions for captured Microsoft Office web links from ESCALATE queue rows and the Email Detail header
 - attachment metadata from `attachments`
 - sanitized browser-readable email HTML when `emails.html_storage_path` exists
 - links or open actions for local raw email and attachment artifacts
 - latest extraction and validation result from `extractions`
 - final decision from `decisions`
 - planned or executed actions from `actions`
-- review queue status when present
+- ESCALATE queue status when present
 - audit run history from `audit_runs`
 - ordered audit steps from `audit_steps`
 - Mermaid trace artifact referenced by `audit_runs.trace_artifact_path`
@@ -113,13 +115,15 @@ Artifact viewing may use local file-serving endpoints for:
 - generated extraction JSON artifacts
 - generated prompt text artifacts
 - Mermaid trace text files
-- dry-run outbound manifests
+- action manifests
 
 The UI must treat local artifacts as sensitive AP data and avoid logging raw contents to the browser console.
 
 Raw Outlook `.msg` files cannot be reliably rendered in-browser in their original Outlook form. The processing pipeline should convert parsed email content to sanitized HTML and store it as an artifact referenced by `emails.html_storage_path`.
 
 The detail page must render the sanitized HTML preview when available. The preview should preserve useful business context such as subject, sender, recipients when available, received timestamp, body content, and attachment list, but it does not need to reproduce Outlook chrome or exact Outlook rendering.
+
+When sanitized HTML includes inline `cid:` references, the dashboard must resolve those references through API-backed attachment serving so inline logos and embedded body images render in the email preview.
 
 Attachment download/open actions must use artifact-serving endpoints backed by local storage for local mode and future Blob Storage references after productionization. The frontend must not construct direct local or blob paths itself.
 
@@ -138,7 +142,7 @@ If Mermaid rendering fails, the raw Mermaid text must remain available with an e
 ## Non-Goals
 
 - No production authentication model in the first local app.
-- No production deployment.
+- No direct production deployment outside `specs/110-azure-hosted-runtime.md`.
 - No direct mailbox mutation.
 - No direct edit of historical emails, extractions, decisions, actions, audit runs, or audit steps.
 - No autonomous decision overrides from the UI.
@@ -146,13 +150,18 @@ If Mermaid rendering fails, the raw Mermaid text must remain available with an e
 ## Acceptance Criteria
 
 - The app starts locally and defaults to dark mode.
+- The app builds for Azure Static Web Apps and protects hosted access with Microsoft Entra SSO.
 - The primary navigation is a toggle group with `Monitor`, `Email Detail`, and `Management`.
 - The monitor page displays business KPIs from local Postgres, not hard-coded demo data.
 - Date range filters update monitor metrics.
 - A user can drill from a monitor queue/event/search result to a selected email detail view.
 - The detail page can search by email metadata and extracted invoice fields.
-- The detail page displays email metadata, attachments, extraction, decision, actions, review status, audit runs, audit steps, and Mermaid trace when present.
+- The detail page displays email metadata, attachments, extraction, decision, actions, ESCALATE status, audit runs, audit steps, and Mermaid trace when present.
+- The detail page can expose the captured Microsoft Office web link for Graph-ingested emails.
+- ESCALATE queue rows and the Email Detail header show an Open action when a captured Microsoft Office web link exists.
 - The detail page renders sanitized email HTML when `emails.html_storage_path` exists.
+- The detail page renders cleaned sanitized HTML previews without visible Outlook CSS/comment noise while preserving useful business content such as forwarded invoice text, signatures, payment details, and links.
+- The detail page renders inline `cid:` images in sanitized HTML when matching attachments exist for the selected email.
 - Missing local artifacts produce explicit visible errors.
 - Mermaid trace artifacts are rendered when valid and shown as raw text when rendering fails.
 - UI tests cover page switching, monitor empty state, email search, detail rendering, and Mermaid fallback.

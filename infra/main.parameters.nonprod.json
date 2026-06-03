@@ -1,0 +1,94 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "NONPROD"
+    },
+    "location": {
+      "value": "southcentralus"
+    },
+    "logicAppLocation": {
+      "value": "northcentralus"
+    },
+    "staticWebAppLocation": {
+      "value": "centralus"
+    },
+    "staticWebAppName": {
+      "value": "swa-hw-propertiesapmail-nonprod"
+    },
+    "appServicePlanName": {
+      "value": "ASP-rghwpropertiesapmailnonprod-9030"
+    },
+    "functionAppName": {
+      "value": "hw-propertiesapmail-nonprod"
+    },
+    "functionIdentityName": {
+      "value": "id-hw-propertiesapmail-nonprod"
+    },
+    "appInsightsName": {
+      "value": "hw-propertiesapmail-nonprod"
+    },
+    "logAnalyticsWorkspaceName": {
+      "value": "law-hw-propertiesapmail-nonprod"
+    },
+    "functionStorageAccountName": {
+      "value": "rghwpropertiesapmai885f"
+    },
+    "artifactStorageAccountName": {
+      "value": "hwpropapsanonprod"
+    },
+    "keyVaultName": {
+      "value": "kv-hw-propapmail-nonprod"
+    },
+    "postgresServerName": {
+      "value": "pg-hw-propertiesapmail-nonprod"
+    },
+    "logicAppName": {
+      "value": "lga-hw-propertiesapmail-nonprod"
+    },
+    "foundryAccountName": {
+      "value": "fdnry-hw-propertiesapmail-nonprod"
+    },
+    "foundryProjectName": {
+      "value": "proj-default"
+    },
+    "entraAdminObjectId": {
+      "value": "e14db939-1792-4e58-bc08-626c7e9e2605"
+    },
+    "entraAdminName": {
+      "value": "Jeremy.Williams@hillwood.com"
+    },
+    "azureOpenAiDeployment": {
+      "value": "gpt-5.4-mini"
+    },
+    "documentIntelligenceEndpoint": {
+      "value": "https://fdnry-hw-propertiesapmail-nonprod.cognitiveservices.azure.com"
+    },
+    "mailboxUserPrincipalName": {
+      "value": "devpropertiesap@hillwood.com"
+    },
+    "teamsTeamNamePropertiesAp": {
+      "value": "Properties AP"
+    },
+    "teamsChannelNamePropertiesAp": {
+      "value": "Properties AP"
+    },
+    "intakePollingIntervalSeconds": {
+      "value": 30
+    },
+    "intakeConcurrencyRuns": {
+      "value": 1
+    },
+    "processGraphIntake": {
+      "value": true
+    },
+    "tags": {
+      "value": {
+        "environment": "NONPROD",
+        "resource-group": "rg-hw-propertiesapmail-nonprod",
+        "workload": "properties-ap-mail"
+      }
+    }
+  }
+}

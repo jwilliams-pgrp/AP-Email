@@ -9,6 +9,19 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$envFile = Join-Path $repoRoot ".env"
+if (Test-Path $envFile) {
+    Get-Content $envFile | ForEach-Object {
+        if ($_ -match '^\s*#' -or $_ -match '^\s*$') { return }
+        $parts = $_ -split '=', 2
+        if ($parts.Count -ne 2) { return }
+        $key = $parts[0].Trim()
+        $value = $parts[1].Trim()
+        if (-not [string]::IsNullOrWhiteSpace($key) -and -not (Test-Path "env:$key")) {
+            Set-Item -Path "env:$key" -Value $value
+        }
+    }
+}
 
 if (-not $AppPath) {
     $candidatePaths = @(
@@ -73,6 +86,9 @@ $env:HOST = $HostAddress
 $env:PORT = "$Port"
 if ($ApiBase) {
     $env:VITE_API_BASE = $ApiBase
+}
+elseif ($env:VITE_API_BASE) {
+    $ApiBase = $env:VITE_API_BASE
 }
 
 Write-Host "Launching React app from $resolvedAppPath"
