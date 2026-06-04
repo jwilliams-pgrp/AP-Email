@@ -131,6 +131,7 @@ Postgres data owns:
 - Bill-to/customer-account address fallback routes to `ESCALATE_UNMATCHED_BUILDING` when no candidate exists, the selected candidate is below threshold, multiple near-equivalent active candidates remain, the selected destination is inactive, or stronger property/site/service/deliver-to/ship-to evidence maps elsewhere.
 - Missing or unknown asset addresses produce explicit unmatched-building `ESCALATE`, including configured informational property notices with property or address evidence but no active asset match.
 - A current reply classified by validated LLM extraction as no-action routes to `DISCARD` / `NO_ACTION` only when parser-derived thread context and deterministic safety gates pass.
+- An appointment confirmation, reminder, or follow-up classified by validated LLM extraction as an informational appointment notice routes to `DISCARD` / `NO_ACTION` only when the configured workflow rule matches the observed fact and blocked AP-risk flags are absent.
 - Multiple actionable document items that all share the same outcome and destination aggregate to one final email action.
 - If any item decision is `ESCALATE` or `FLAG`, the aggregated final decision uses the matching item decision with the lowest numeric workflow-rule priority.
 - If multiple `AUTO`, `FILE`, or `DISCARD` item decisions disagree on outcome or destination, the aggregated final decision uses the table-driven mixed-item-destination escalation rule with destination `ESCALATE_SPLIT_MULTI_PDF`.

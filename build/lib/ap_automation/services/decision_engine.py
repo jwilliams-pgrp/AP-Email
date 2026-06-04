@@ -396,6 +396,26 @@ class DecisionEngine:
             matched, reason = _matches_current_reply_no_action(rule, extraction, decision_context)
             return matched, reason
 
+        if condition_type == "observed_fact":
+            fact_key = _required_condition(rule, "fact_key")
+            if not isinstance(fact_key, str):
+                raise MissingWorkflowConfigError(f"{rule.rule_code}.fact_key must be a string.")
+            document_types = _optional_string_list_condition(rule, "document_types")
+            if document_types and extraction.document.document_type not in document_types:
+                return False, f"document_type {extraction.document.document_type} not matched"
+            blocked_flags = set(_optional_string_list_condition(rule, "blocked_flags"))
+            matched_blocked_flags = sorted(flag for flag in extraction.document.document_flags if flag in blocked_flags)
+            if matched_blocked_flags:
+                return False, f"blocked flags present: {', '.join(matched_blocked_flags)}"
+            if bool(rule.conditions.get("forbid_source_attachments", False)) and extraction.evidence.source_attachments:
+                return False, "document item cites attachments"
+            actual = bool(getattr(extraction.observed_facts, fact_key, False))
+            expected = rule.conditions.get("expected", True)
+            if not isinstance(expected, bool):
+                raise MissingWorkflowConfigError(f"{rule.rule_code}.expected must be boolean when provided.")
+            matched = actual == expected
+            return matched, f"observed_fact {fact_key}={actual} expected={expected}"
+
         if condition_type == "pre_decision_fact":
             fact_key = _required_condition(rule, "fact_key")
             if not isinstance(fact_key, str):

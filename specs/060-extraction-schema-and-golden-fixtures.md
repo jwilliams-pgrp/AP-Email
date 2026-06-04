@@ -125,6 +125,7 @@ The per-document validated extraction payload must be JSON with this top-level s
     "indicates_vendor_question_or_payment_inquiry": false,
     "indicates_wrong_destination": false,
     "latest_reply_indicates_no_ap_action": false,
+    "indicates_informational_appointment_notice": false,
     "indicates_ach_or_auto_draft": false,
     "indicates_ben_e_keith": false,
     "has_conflicting_signals": false,
@@ -276,6 +277,9 @@ Normalize extracted property lookup values before database comparison:
 - Keep ZIP codes as 5-digit numeric values only.
 - Do not invent missing values.
 - Treat labels such as Building, Property, Site, Job, Location, Ship To, Service Location, and the email subject as property identity sources when they explicitly contain property facts.
+- Treat labeled `Project`, `Job`, `Site`, `Location`, `Service Location`, `Property`, `Building`, `Ship To`, and `Deliver To` values as property identity evidence when the labeled value visibly matches an `asset_reference.asset_name` or `asset_reference.asset_alias`. Populate `property_lookup.property_name` with the normalized asset name and `property_lookup.property_code` with the normalized alias/code when available.
+- Do not drop a visible labeled project/property/site value merely because address evidence is incomplete, city-mismatched, ZIP-missing, or shared by multiple assets. If the labeled name identifies one configured asset and the address matches multiple configured assets, the labeled name/code is the distinguishing lookup signal.
+- Do not promote generic project/job descriptions into `property_lookup.property_name` or `property_lookup.property_code` unless they visibly match a configured asset name or alias; keep uncertain values in `business_signals.possible_property_aliases` or `evidence.summary`.
 - Asset codes are short building aliases such as `GW31`, `GW 31`, `HCX`, `HC-2`, `ACC 14`, or `WP9`; return normalized compact variants in `property_lookup.property_code`, such as `gw31` or `hc2`.
 - Asset names are building names such as `Alliance Gateway 31` or `Heritage Commons X`; return normalized names in `property_lookup.property_name` when visible.
 - Preserve explicit visible asset names exactly in audit-facing fields such as `invoice.property_name`, `address_candidates.evidence_text`, and `evidence.summary`. Do not rewrite a visible asset name into a different canonical asset family because a nearby address, bill-to value, customer account, or code resembles another asset.
@@ -336,6 +340,8 @@ Routine invoice-payment collection language must not set `observed_facts.indicat
 `observed_facts.indicates_vendor_question_or_payment_inquiry` is reserved for AP research or response cases where the sender asks AP to answer, confirm, research, reconcile, or explain invoice, payment, or account facts. Examples include duplicate payment confirmation, "can you please confirm", "please advise", missing remittance, identifying which invoice an ACH paid, payment-to-invoice matching, multiple possible open invoices for one payment, account reconciliation, disputes, credits, missing backup/support questions, and no-attachment vendor payment/account questions.
 
 `observed_facts.indicates_wrong_destination` is reserved for explicit recipient replies or forwards stating they are the wrong person, should not have received the routed email, or that AP should escalate because the prior destination was wrong.
+
+`observed_facts.indicates_informational_appointment_notice` is reserved for source-visible, non-payable appointment or service-visit communications such as confirmations, reminders, follow-ups, upcoming appointments, scheduled service visits, technician visits, and reschedule notices. It must be false when the current email identifies a current invoice, bill, payment request, statement, vendor question, link-only invoice, or other AP action.
 
 `observed_facts.current_invoice_is_past_due` is reserved for facts showing the current payable invoice is itself explicitly past due, overdue, in collection, or the document is classified as a true `past_due_notice`. A payable current invoice with `invoice.due_date` before `email.received_at.date()` must not set this fact from date comparison alone. It may be true when the source includes explicit past-due, overdue, collection, reminder, `Due Date`, `Payment Due`, `Please remit by`, or equivalent payment-deadline wording for the current invoice and the labeled date is before receipt. `invoice.due_date` may still be populated for extracted invoice fields, including payable-upon-receipt terms when the document presents a payment due date, but extractors must not copy `invoice.invoice_date` into `invoice.due_date` unless the document explicitly presents that date as the payment due date. “Payable upon receipt,” “current invoice due,” prior balances, or copied invoice dates alone must not count as explicit past-due evidence. Statements and account summaries with aging tables, open items, or account-level past-due balances remain statement/account-summary filing candidates and must not be classified as past-due notices unless the document is explicitly a past-due or collection notice. It must be false when the current invoice amount or balance due is in the `Current` aging bucket, even if other account-level aging buckets have nonzero past-due balances.
 

@@ -56,6 +56,7 @@ The code may define supported condition types, but business-specific condition v
 - When a visible property name and address disagree, LLM extraction and advisory review should prefer the visible property name for canonical asset normalization unless the source explicitly identifies the address as the service, site, delivery, shipping, or property address for the invoice.
 - A visible `Hillwood Commons II` name should normalize to `Hillwood Commons II` / `HWC2` when that asset exists in the provided asset reference or candidate set. It must not be converted to `Heritage Commons II` / `HC2` unless the source visibly says `Heritage Commons II` or `HC2`.
 - Project, Job, Site, Service Location, Location, Deliver To, Ship To, and Property evidence is stronger serviced-property evidence than Bill To when these source fields conflict.
+- When extraction sees a labeled Project, Job, Site, Location, Service Location, Property, Building, Ship To, or Deliver To value that visibly matches an asset name or alias, that value must be returned in structured `property_lookup.property_name` and/or `property_lookup.property_code`. This structured name/code should disambiguate shared-address assets.
 - Bill-to or customer-account address evidence may be used as an automatic-routing fallback when no property code, property name, tenant, service/site/delivery/shipping/property address, or other stronger serviced-property signal maps to an active asset.
 - Bill-to address fallback is not allowlisted. Any active asset address candidate may qualify when deterministic matching returns exactly one clear active candidate above `property_match_min_score`.
 - Bill-to address fallback must not override a stronger conflicting property, site, service, deliver-to, or ship-to signal. Unresolved project, job, or property text is not a conflict unless it identifies a different configured asset, address, property name, or property code.
@@ -161,6 +162,15 @@ If the latest reply in a thread is classified by validated LLM extraction as ind
 - The LLM may classify only what `email.latest_body_text` indicates; quoted history is background and must not create current invoice, link-only, vendor-question, wrong-destination, or property-routing facts by itself.
 - Deterministic code must still require parser-derived thread context, quoted history when configured, allowed sender-domain policy when configured, and no current item attachments.
 - Deterministic code must make the final `DISCARD` decision; the LLM must not choose the destination or outcome.
+
+### Appointment Informational Notice
+If validated LLM extraction classifies the current email as informational about an appointment or service visit:
+- outcome: `DISCARD`
+- destination: `NO_ACTION`
+- reason: LLM classified current email as informational appointment notice
+- Applies to non-payable appointment confirmations, reminders, follow-ups, upcoming appointments, scheduled service visits, technician visits, reschedule notices, and similar appointment/service-visit communications.
+- Must not apply to invoices, statements, account summaries, payment links, past-due notices, vendor inquiries, wrong-destination replies, contracts, pay applications, check requests, unsupported attachments, ACH or auto-draft notices, Ben E Keith notices, lien releases, or conflicting/low-quality inputs.
+- The LLM may classify only the source-observable appointment fact. Deterministic code must make the final `DISCARD` decision from the validated observed fact and workflow rule configuration.
 
 ### Invoice Over Amount Threshold
 If invoice amount is greater than the configured threshold:
@@ -293,6 +303,7 @@ If no rule applies:
 - Emails with payment-portal links and no invoice attachment deterministically normalize to link-only invoice and route to `ESCALATE`.
 - Configured automated non-AP notifications route to `DISCARD` with destination `NO_ACTION`.
 - Current replies whose latest body is classified by validated LLM extraction as a no-action acknowledgement, courtesy/social reply, or confirmation that the recipient will handle/process the prior item route to `DISCARD` with destination `NO_ACTION` when deterministic thread, sender, and attachment gates pass.
+- Appointment confirmations, reminders, and follow-ups classified by validated LLM extraction as informational appointment notices route to `DISCARD` with destination `NO_ACTION` when configured blocked AP-risk flags are absent.
 - Invoices over the configured amount threshold route automatically only when their normal deterministic destination is `MEDIUS_PROPERTIES` and an explicit project number was extracted from a `PROJECT NO` or `PROJECT NUMBER` signal.
 - Invoices over the configured amount threshold whose normal deterministic destination is not `MEDIUS_PROPERTIES`, or whose normal deterministic destination is `MEDIUS_PROPERTIES` without an explicit project number, route to configured `ESCALATE_OVER_10000`, except ALC invoices route to `ESCALATE_ALC` first and matched multifamily assets route to `ESCALATE_MULTIFAMILY` first.
 - Mixed extracted document-item outcomes or destinations aggregate to `ESCALATE_SPLIT_MULTI_PDF`.

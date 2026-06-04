@@ -858,6 +858,16 @@ class ExtractionValidationTests(unittest.TestCase):
 
         self.assertIn("extraction.observed_facts.latest_reply_indicates_no_ap_action", lint["missing_required_keys"])
 
+    def test_contract_lint_reports_missing_informational_appointment_observed_fact(self) -> None:
+        payload = _base_payload()
+        del payload["observed_facts"]["indicates_informational_appointment_notice"]
+
+        with self.assertRaises(ExtractionValidationError):
+            validate_extraction(payload)
+        lint = lint_extraction_contract(payload)
+
+        self.assertIn("extraction.observed_facts.indicates_informational_appointment_notice", lint["missing_required_keys"])
+
     def test_azure_openai_prompt_includes_validator_required_field_names(self) -> None:
         prompt = _prompt(
             ParsedMsg(
@@ -956,14 +966,49 @@ class ExtractionValidationTests(unittest.TestCase):
             "GW 31 / US Conec",
             "Final source-support check before returning JSON",
             "The asset_reference list is not source evidence for this check",
+            "Canonical property codes and names may be populated only when visibly supported",
+            "Labeled identity fields such as Project, Job, Site, Location, Service Location, Property, Building, Ship To, Deliver To",
+            "When the value following one of these labels visibly matches an asset_reference asset_name or asset_alias",
+            "Do not drop or demote a visible labeled Project, Job, Site, Location, or Property value solely because address evidence is incomplete, city-mismatched, ZIP-missing, or shared by multiple assets",
+            'Project Circle T Ranch',
+            'property_lookup.property_name=["circle t ranch"]',
+            'property_lookup.property_code=["ctr"]',
+            "If a Project or Job value is a generic work description",
+            "scan selected attachment text for labels Project, Job, Site, Location, Service Location, Property, Building, Ship To, and Deliver To",
+            "Visible addresses should become address candidates first",
+            "do not invent property codes or property names from address resemblance alone",
+            "Do not put account, customer, or tenant names into invoice.property_code",
+            "Do not copy invoice number into invoice.project_number or invoice.job_number unless the source explicitly labels that value",
             "Tenant-only source text such as Pei Wei/Chipotle",
             "Return only the final corrected JSON; do not include the self-check",
+            "Property identity evidence hierarchy",
+            "service/site/location/deliver-to/ship-to evidence is stronger",
+            "Bill-to and customer-account facts may populate invoice.bill_to fields",
+            "must not override serviced-property identity",
+            "A bill-to address that maps to a different asset is not a conflict",
+            "Set observed_facts.has_conflicting_signals=true only for material conflicts among same-strength property signals",
+            "Hillwood Alliance Airport Tower",
+            'property_lookup.property_name=["hillwood alliance airport tower"]',
+            'property_lookup.property_code=["tower"]',
+            'address_candidates[0].label="service_location"',
+            'address_candidates[1].label="bill_to"',
+            "property_lookup.property_name=[\"hillwood commons i\"]",
+            "property_lookup.property_code=[\"hwc1\"]",
             "complete normalized address",
             "5201 alliance gateway freeway fort worth tx 76177",
             "SQL treats earlier property_lookup.address values as stronger",
+            "Do not use remit-to, sender, vendor, or signature addresses as serviced-property evidence",
             "Do not set indicates_vendor_question_or_payment_inquiry for routine invoice-payment collection language",
+            "Routine AP processing or collection language is not a vendor question",
+            "please process",
+            "please submit payment",
+            "please remit",
+            "include invoice number",
+            "reference invoice number",
+            "contact us with questions",
             "no-attachment vendor payment or account questions",
             "answer, confirm, research, reconcile, or explain invoice, payment, or account facts",
+            "A vendor question requires AP to answer, confirm, research, reconcile, or explain",
             "duplicate payment confirmation",
             "service appointment reminders, maintenance reminders, inspection notices, access notices",
             "generic customer portals, account portals",
@@ -976,6 +1021,7 @@ class ExtractionValidationTests(unittest.TestCase):
             "Can you please Confirm?",
             "indicates_wrong_destination",
             '"latest_reply_indicates_no_ap_action": false',
+            '"indicates_informational_appointment_notice": false',
             "email.latest_body_text itself indicates a non-actionable acknowledgement",
             "does not ask a question, report a wrong destination, introduce a new invoice/payment/link action",
             "wrong-recipient escalation",
@@ -1003,6 +1049,13 @@ class ExtractionValidationTests(unittest.TestCase):
             '{"invoice":{"property_code":"gw34"}}',
             '{"confidence":{"overall":"0.92"}}',
             '{"confidence":{"overall":0.92}}',
+            "Final silent self-check before returning JSON",
+            "verify every populated field is visibly source-supported",
+            "verify stronger service/site/location evidence was not overridden",
+            "verify asset_reference was used only for normalization",
+            "verify routine payment or remittance language did not become vendor inquiry",
+            "verify no workflow outcomes, destinations, document.document_flags",
+            "Do not include this self-check in the JSON output",
         ]
         for field_name in required_field_names:
             self.assertIn(field_name, prompt)
@@ -1052,6 +1105,12 @@ class ExtractionValidationTests(unittest.TestCase):
         self.assertIn("verify every invoice.property_code, invoice.property_name, property_lookup.property_code, and property_lookup.property_name", prompt)
         self.assertIn("email subject, email body, selected attachment text, or attachment metadata", prompt)
         self.assertIn("The asset_reference list is not source evidence for this check", prompt)
+        self.assertIn("Canonical property codes and names may be populated only when visibly supported", prompt)
+        self.assertIn("asset_reference can normalize visible source text but is not source evidence", prompt)
+        self.assertIn("Visible addresses should become address candidates first", prompt)
+        self.assertIn("do not invent property codes or property names from address resemblance alone", prompt)
+        self.assertIn("Do not put account, customer, or tenant names into invoice.property_code", prompt)
+        self.assertIn("Do not copy invoice number into invoice.project_number or invoice.job_number", prompt)
         self.assertIn("only inferred from asset_reference", prompt)
         self.assertIn("remove it from property_lookup arrays and set invoice.property_code or invoice.property_name to null", prompt)
         self.assertIn("Tenant-only source text such as Pei Wei/Chipotle", prompt)
@@ -1065,6 +1124,15 @@ class ExtractionValidationTests(unittest.TestCase):
         self.assertIn('property_lookup.property_name=["alliance gateway 31"]', prompt)
         self.assertIn("lower confidence.property_identity and set observed_facts.has_conflicting_signals=true", prompt)
         self.assertIn("Return only the final corrected JSON; do not include the self-check", prompt)
+        self.assertIn("Property identity evidence hierarchy", prompt)
+        self.assertIn("Bill-to and customer-account facts may populate invoice.bill_to fields", prompt)
+        self.assertIn("must not override serviced-property identity", prompt)
+        self.assertIn("A bill-to address that maps to a different asset is not a conflict", prompt)
+        self.assertIn("Hillwood Alliance Airport Tower", prompt)
+        self.assertIn('property_lookup.property_name=["hillwood alliance airport tower"]', prompt)
+        self.assertIn('property_lookup.property_code=["tower"]', prompt)
+        self.assertIn("Final silent self-check before returning JSON", prompt)
+        self.assertIn("verify asset_reference was used only for normalization", prompt)
 
     def test_contract_repair_prompt_tells_llm_to_remove_non_address_candidates(self) -> None:
         repair_prompt = contract_repair_prompt(
@@ -1081,6 +1149,7 @@ class ExtractionValidationTests(unittest.TestCase):
         self.assertIn("Canonical field checklist", repair_prompt)
         self.assertIn("observed_facts keys", repair_prompt)
         self.assertIn("latest_reply_indicates_no_ap_action", repair_prompt)
+        self.assertIn("indicates_informational_appointment_notice", repair_prompt)
         self.assertIn("confidence keys", repair_prompt)
         self.assertIn("Advisory contract lint findings", repair_prompt)
         self.assertIn("indicates_ben_e_kieth", repair_prompt)
@@ -1260,6 +1329,7 @@ def _base_payload() -> dict:
             "indicates_vendor_question_or_payment_inquiry": False,
             "indicates_wrong_destination": False,
             "latest_reply_indicates_no_ap_action": False,
+            "indicates_informational_appointment_notice": False,
             "indicates_ach_or_auto_draft": False,
             "indicates_ben_e_keith": False,
             "has_conflicting_signals": False,

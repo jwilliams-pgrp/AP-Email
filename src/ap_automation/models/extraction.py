@@ -70,6 +70,7 @@ class ObservedFacts:
     indicates_vendor_question_or_payment_inquiry: bool
     indicates_wrong_destination: bool
     latest_reply_indicates_no_ap_action: bool
+    indicates_informational_appointment_notice: bool
     indicates_ach_or_auto_draft: bool
     indicates_ben_e_keith: bool
     has_conflicting_signals: bool
@@ -277,6 +278,7 @@ class ExtractionPayload:
                 "indicates_vendor_question_or_payment_inquiry": self.observed_facts.indicates_vendor_question_or_payment_inquiry,
                 "indicates_wrong_destination": self.observed_facts.indicates_wrong_destination,
                 "latest_reply_indicates_no_ap_action": self.observed_facts.latest_reply_indicates_no_ap_action,
+                "indicates_informational_appointment_notice": self.observed_facts.indicates_informational_appointment_notice,
                 "indicates_ach_or_auto_draft": self.observed_facts.indicates_ach_or_auto_draft,
                 "indicates_ben_e_keith": self.observed_facts.indicates_ben_e_keith,
                 "has_conflicting_signals": self.observed_facts.has_conflicting_signals,
@@ -431,6 +433,12 @@ def validate_extraction(payload: dict[str, Any]) -> ExtractionPayload:
             observed_raw,
             "latest_reply_indicates_no_ap_action",
             "observed_facts.latest_reply_indicates_no_ap_action",
+            errors,
+        ),
+        indicates_informational_appointment_notice=_required_bool(
+            observed_raw,
+            "indicates_informational_appointment_notice",
+            "observed_facts.indicates_informational_appointment_notice",
             errors,
         ),
         indicates_ach_or_auto_draft=_required_bool(observed_raw, "indicates_ach_or_auto_draft", "observed_facts.indicates_ach_or_auto_draft", errors),

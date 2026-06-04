@@ -1221,7 +1221,7 @@ class DecisionEngineGoldenScenarioTests(unittest.TestCase):
         self.assertEqual(decision.outcome, "ESCALATE")
         self.assertEqual(decision.matched_rule_code, "hard_vendor_inquiry")
 
-    def test_informational_property_notice_routes_to_property_destination(self) -> None:
+    def test_appointment_informational_notice_routes_to_no_action(self) -> None:
         decision = self._decide(
             document_type="unknown",
             subject="Upcoming Service Appointment on Wednesday, May 13th",
@@ -1231,17 +1231,41 @@ class DecisionEngineGoldenScenarioTests(unittest.TestCase):
             service_address="9800 Hillwood Parkway STE 300",
             bill_to="Hillwood Properties",
             business_unit_code=None,
+            requires_attachment=False,
             has_invoice_attachment=False,
             amount=0,
             source_attachments=[],
+            flags=["informational_appointment_notice"],
             evidence_summary="Service appointment reminder for the matched property address.",
         )
 
-        self.assertEqual(decision.outcome, "AUTO")
-        self.assertEqual(decision.destination_code, "MEDIUS_PROPERTIES")
-        self.assertEqual(decision.matched_rule_code, "informational_property_notice")
+        self.assertEqual(decision.outcome, "DISCARD")
+        self.assertEqual(decision.destination_code, "NO_ACTION")
+        self.assertEqual(decision.matched_rule_code, "appointment_informational_notice")
 
-    def test_informational_property_notice_routes_16501_victory_circle_to_unmatched_building(self) -> None:
+    def test_appointment_informational_notice_routes_16501_victory_circle_to_no_action(self) -> None:
+        decision = self._decide(
+            document_type="unknown",
+            subject="Service appointment reminder",
+            vendor_name="Service Vendor",
+            property_code=None,
+            property_name=None,
+            service_address="16501 Victory Circle",
+            bill_to=None,
+            business_unit_code=None,
+            requires_attachment=False,
+            has_invoice_attachment=False,
+            amount=0,
+            source_attachments=[],
+            flags=["informational_appointment_notice"],
+            evidence_summary="Service appointment reminder for 16501 Victory Circle.",
+        )
+
+        self.assertEqual(decision.outcome, "DISCARD")
+        self.assertEqual(decision.destination_code, "NO_ACTION")
+        self.assertEqual(decision.matched_rule_code, "appointment_informational_notice")
+
+    def test_appointment_informational_notice_requires_llm_fact(self) -> None:
         decision = self._decide(
             document_type="unknown",
             subject="Service appointment reminder",
@@ -1260,6 +1284,26 @@ class DecisionEngineGoldenScenarioTests(unittest.TestCase):
         self.assertEqual(decision.outcome, "ESCALATE")
         self.assertEqual(decision.destination_code, "ESCALATE_UNMATCHED_BUILDING")
         self.assertEqual(decision.matched_rule_code, "hard_unmatched_building")
+
+    def test_informational_property_notice_routes_to_property_destination_when_not_appointment(self) -> None:
+        decision = self._decide(
+            document_type="unknown",
+            subject="Property access notice",
+            vendor_name="Service Vendor",
+            property_code=None,
+            property_name=None,
+            service_address="9800 Hillwood Parkway STE 300",
+            bill_to="Hillwood Properties",
+            business_unit_code=None,
+            has_invoice_attachment=False,
+            amount=0,
+            source_attachments=[],
+            evidence_summary="Informational property access notice for the matched property address.",
+        )
+
+        self.assertEqual(decision.outcome, "AUTO")
+        self.assertEqual(decision.destination_code, "MEDIUS_PROPERTIES")
+        self.assertEqual(decision.matched_rule_code, "informational_property_notice")
 
     def test_informational_property_notice_does_not_override_link_only_invoice(self) -> None:
         decision = self._decide(
@@ -1383,6 +1427,50 @@ class DecisionEngineGoldenScenarioTests(unittest.TestCase):
         self.assertEqual(decision.outcome, "AUTO")
         self.assertEqual(decision.destination_code, "MICHELE_FELLERS")
         self.assertEqual(decision.routing_match["property_gate"]["llm_selected_asset_id"], "asset-HC2")
+
+    def test_project_property_name_disambiguates_shared_address_candidates(self) -> None:
+        repository = InMemoryPolicyRepository()
+        repository.properties["CTR"] = PropertyMatch("asset-CTR", "CTR", "Circle T Ranch", "hillwood_owned", "Hillwood", "industrial", "PROP", "MEDIUS_PROPERTIES")
+        repository.properties["CTG"] = PropertyMatch("asset-CTG", "CTG", "Circle T Golf Course", "hillwood_owned", "Hillwood", "industrial", "PROP", "MEDIUS_PROPERTIES")
+        reviewer = FakePropertyMatchReviewer(selected_asset_id="asset-CTR")
+        extraction = validate_extraction(
+            _payload(
+                property_code=None,
+                property_name=None,
+                service_address="2451 Westlake Parkway, Westlake, TX",
+                property_lookup={
+                    "property_code": ["ctr"],
+                    "property_name": ["circle t ranch"],
+                    "tenant": [],
+                    "address": ["2451 westlake parkway", "2451 westlake parkway westlake tx"],
+                    "suite": [],
+                    "city": ["westlake"],
+                    "state": ["tx"],
+                    "zipcode": [],
+                    "address_candidates": [
+                        {
+                            "rank": 1,
+                            "label": "bill_to",
+                            "street": "2451 westlake parkway",
+                            "city": "westlake",
+                            "state": "tx",
+                            "zipcode": None,
+                            "normalized_address": "2451 westlake parkway westlake tx",
+                            "source": "attachment:invoice.pdf:page 1",
+                            "confidence": 0.86,
+                            "evidence_text": "Bill To 2451 Westlake Parkway Westlake, Tx",
+                        }
+                    ],
+                },
+                evidence_summary="Project Circle T Ranch",
+            )
+        )
+
+        decision = DecisionEngine(repository, property_match_reviewer=reviewer).decide(extraction, "key").decision
+
+        self.assertEqual(decision.outcome, "AUTO")
+        self.assertEqual(decision.destination_code, "MEDIUS_PROPERTIES")
+        self.assertEqual(decision.routing_match["property_match"]["property_code"], "CTR")
 
     def test_tenant_assisted_match_routes_auto(self) -> None:
         decision = self._decide(property_code=None, property_name=None, bill_to="Nuveen")
@@ -1525,11 +1613,11 @@ class InMemoryPolicyRepository(PolicyRepository):
                 code,
                 match.property_name or "",
                 "Nuveen" if code == "EXT1" else "Hillwood Properties",
-                "9800 Hillwood Parkway STE 300" if code in {"HW1", "HW1B"} else ("13601 N Fwy" if code in {"HC2", "HC3"} else ("9700 Hillwood Parkway STE 200" if code == "HC2" else ("2451 Westlake Parkway" if code == "WEST1" else ("5300 Alliance Gateway Freeway" if code == "GW9" else "100 External Blvd")))),
+                "9800 Hillwood Parkway STE 300" if code in {"HW1", "HW1B"} else ("13601 N Fwy" if code in {"HC2", "HC3"} else ("9700 Hillwood Parkway STE 200" if code == "HC2" else ("2451 Westlake Parkway" if code in {"WEST1", "CTR", "CTG"} else ("5300 Alliance Gateway Freeway" if code == "GW9" else "100 External Blvd")))),
                 "STE 300" if code == "HW1" else ("STE 200" if code == "HC2" else ""),
-                "Fort Worth" if code in {"HW1", "GW9"} else ("Arlington" if code == "HC2" else ("Westlake" if code == "WEST1" else "Irving")),
+                "Fort Worth" if code in {"HW1", "GW9"} else ("Arlington" if code == "HC2" else ("Westlake" if code in {"WEST1", "CTR", "CTG"} else "Irving")),
                 "TX",
-                "76177" if code == "HW1" else ("76176" if code == "HC2" else ("76262" if code == "WEST1" else "76155")),
+                "76177" if code == "HW1" else ("76176" if code == "HC2" else ("76262" if code in {"WEST1", "CTR", "CTG"} else "76155")),
             ]
             score = 0.0
             matched_text = ""
@@ -1667,6 +1755,33 @@ def _rules() -> list[WorkflowRule]:
             {"require_quoted_history": True, "allowed_sender_domains": ["hillwood.com"]},
         ),
         _rule(
+            "appointment_informational_notice",
+            116,
+            "observed_fact",
+            "DISCARD",
+            "NO_ACTION",
+            {
+                "fact_key": "indicates_informational_appointment_notice",
+                "expected": True,
+                "document_types": ["unknown"],
+                "blocked_flags": [
+                    "link_only_invoice",
+                    "missing_invoice_attachment",
+                    "vendor_inquiry",
+                    "wrong_destination",
+                    "past_due",
+                    "statement_or_account_summary",
+                    "ach_or_auto_draft",
+                    "ben_e_keith",
+                    "contract_or_pay_application",
+                    "lien_release_related",
+                    "conflicting_signals",
+                    "low_text_quality",
+                ],
+                "forbid_source_attachments": True,
+            },
+        ),
+        _rule(
             "hard_wrong_file_type",
             115,
             "attachment_extension",
@@ -1763,7 +1878,8 @@ def _payload(**overrides: Any) -> dict[str, Any]:
         observed_facts["indicates_multiple_invoices"] = True
     if overrides.get("link_only", False):
         observed_facts["mentions_payment_link_only"] = True
-    if overrides.get("has_invoice_attachment") is False:
+    requires_attachment = overrides.get("requires_attachment", True)
+    if overrides.get("has_invoice_attachment") is False and requires_attachment is True:
         observed_facts["mentions_missing_invoice_attachment"] = True
     payload = {
         "schema_version": "extraction.v1",
@@ -1775,7 +1891,7 @@ def _payload(**overrides: Any) -> dict[str, Any]:
         },
         "document": {
             "document_type": overrides.get("document_type", "invoice"),
-            "requires_attachment": True,
+            "requires_attachment": requires_attachment,
             "has_invoice_attachment": overrides.get("has_invoice_attachment", True),
             "link_only": overrides.get("link_only", False),
             "multi_invoice": overrides.get("multi_invoice", False),
@@ -1855,6 +1971,7 @@ def _observed_facts(flags: list[str]) -> dict[str, bool]:
         "indicates_vendor_question_or_payment_inquiry": False,
         "indicates_wrong_destination": False,
         "latest_reply_indicates_no_ap_action": False,
+        "indicates_informational_appointment_notice": False,
         "indicates_ach_or_auto_draft": False,
         "indicates_ben_e_keith": False,
         "has_conflicting_signals": False,
@@ -1877,6 +1994,8 @@ def _observed_facts(flags: list[str]) -> dict[str, bool]:
             observed["indicates_wrong_destination"] = True
         elif flag == "latest_reply_no_action":
             observed["latest_reply_indicates_no_ap_action"] = True
+        elif flag == "informational_appointment_notice":
+            observed["indicates_informational_appointment_notice"] = True
         elif flag == "past_due":
             observed["current_invoice_is_past_due"] = True
         elif flag == "statement_or_account_summary":

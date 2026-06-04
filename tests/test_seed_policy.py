@@ -34,7 +34,11 @@ class SeedPolicyTests(unittest.TestCase):
         self.assertRegex(seed_sql, r"\('ben_e_keith_notice_file',\s*'[^']+',\s*113,")
 
     def test_one_time_db_scripts_are_not_part_of_current_baseline(self) -> None:
-        allowed_targeted_scripts = {"add-asset-custom-lookup.sql", "update-current-reply-no-action.sql"}
+        allowed_targeted_scripts = {
+            "add-appointment-informational-no-action.sql",
+            "add-asset-custom-lookup.sql",
+            "update-current-reply-no-action.sql",
+        }
         one_time_scripts = [
             path.name
             for path in (ROOT / "db").glob("*.sql")

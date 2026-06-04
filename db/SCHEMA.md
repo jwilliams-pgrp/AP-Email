@@ -260,6 +260,6 @@ Indexes:
 
 ## Seed Ownership
 
-`db/seed.sql` seeds current local `asset` and `ownership` rows exported from live local Postgres `apautomation` on 2026-05-20. It also seeds workflow rules, runtime config, destinations, no-action patterns, and workflow rule version snapshots. Fresh local databases include `informational_property_notice`, which routes eligible non-payable property notices to the matched asset's ownership-derived destination. Fresh local databases also include the split-multi-PDF and multifamily escalation destinations and active policy.
+`db/seed.sql` seeds current local `asset` and `ownership` rows exported from live local Postgres `apautomation` on 2026-05-20. It also seeds workflow rules, runtime config, destinations, no-action patterns, and workflow rule version snapshots. Fresh local databases include `appointment_informational_notice`, which routes LLM-classified appointment confirmations, reminders, and follow-ups to `NO_ACTION`, and `informational_property_notice`, which routes other eligible non-payable property notices to the matched asset's ownership-derived destination. Fresh local databases also include the split-multi-PDF and multifamily escalation destinations and active policy.
 
 One-time `add-*.sql` and `update-*.sql` files are not part of the current baseline. Accepted SQL behavior, schema, or configuration changes must be folded back into `db/schema.sql` and/or `db/seed.sql`.

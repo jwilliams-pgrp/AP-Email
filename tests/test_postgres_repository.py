@@ -512,6 +512,10 @@ class PropertyValueNormalizationTests(unittest.TestCase):
     def test_seed_includes_informational_property_notice_rule(self) -> None:
         seed_sql = Path("db/seed.sql").read_text(encoding="utf-8")
 
+        self.assertIn("'appointment_informational_notice'", seed_sql)
+        self.assertIn("'appointment_informational_notice', 'fact_key', '\"indicates_informational_appointment_notice\"'::jsonb", seed_sql)
+        self.assertIn("'appointment_informational_notice', 'document_types', '[\"unknown\"]'::jsonb", seed_sql)
+        self.assertIn("'appointment_informational_notice', 'forbid_source_attachments', 'true'::jsonb", seed_sql)
         self.assertIn("'informational_property_notice'", seed_sql)
         self.assertIn("'informational_property_notice', 'document_types', '[\"unknown\"]'::jsonb", seed_sql)
         self.assertIn("'informational_property_notice', 'blocked_flags'", seed_sql)
@@ -522,7 +526,15 @@ class PropertyValueNormalizationTests(unittest.TestCase):
         self.assertIn('"conflicting_signals"', seed_sql)
         self.assertIn('"low_text_quality"', seed_sql)
         self.assertIn("'hard_unmatched_building', 'document_types', '[\"invoice\", \"unknown\"]'::jsonb", seed_sql)
+        self.assertLess(seed_sql.index("'appointment_informational_notice'"), seed_sql.index("'informational_property_notice'"))
         self.assertLess(seed_sql.index("'informational_property_notice'"), seed_sql.index("'property_routing_match'"))
+
+    def test_standalone_sql_adds_appointment_informational_notice_rule(self) -> None:
+        targeted_sql = Path("db/add-appointment-informational-no-action.sql").read_text(encoding="utf-8")
+
+        self.assertIn("'appointment_informational_notice'", targeted_sql)
+        self.assertIn("'NO_ACTION'", targeted_sql)
+        self.assertIn('"indicates_informational_appointment_notice"', targeted_sql)
 
     def test_seed_includes_alc_escalation_policy(self) -> None:
         seed_sql = Path("db/seed.sql").read_text(encoding="utf-8")
@@ -596,6 +608,7 @@ def _base_payload() -> dict:
             "indicates_vendor_question_or_payment_inquiry": False,
             "indicates_wrong_destination": False,
             "latest_reply_indicates_no_ap_action": False,
+            "indicates_informational_appointment_notice": False,
             "indicates_ach_or_auto_draft": False,
             "indicates_ben_e_keith": False,
             "has_conflicting_signals": False,
