@@ -318,6 +318,11 @@ def _prompt(extraction: ExtractionPayload, alias_mappings: list[dict[str, Any]])
             "business_unit_code": extraction.business_signals.business_unit_code,
             "possible_property_aliases": list(extraction.business_signals.possible_property_aliases),
         },
+        "evidence": {
+            "summary": extraction.evidence.summary,
+            "source_attachments": list(extraction.evidence.source_attachments),
+            "source_pages": list(extraction.evidence.source_pages),
+        },
         "dataset": compact_dataset,
     }
     return (
@@ -340,11 +345,13 @@ def _prompt(extraction: ExtractionPayload, alias_mappings: list[dict[str, Any]])
         "- Return exactly one candidate_property_matches item when the invoice evidence clearly selects one candidate.\n"
         "- Use an empty candidate list when evidence is weak or ambiguous after comparing all candidates.\n"
         "- Use an empty candidate list when you cannot cite evidence.\n"
-        "- Compare extracted property code, property name, tenant, possible aliases, service/property/site address, bill-to, and each candidate asset_alias, asset_name, asset_type, matched_text, matched_column, and similarity_score.\n"
+        "- Compare extracted property code, property name, tenant, possible aliases, evidence.summary, address_candidates[].evidence_text, service/property/site address, bill-to, and each candidate asset_alias, asset_name, asset_type, matched_text, matched_column, and similarity_score.\n"
         "- Prefer explicit asset-code, building-name, tenant, and service/property/site evidence over inferred vendor hints.\n"
         "- Prefer explicit visible asset or property name evidence over conflicting bill-to address evidence when the name selects a candidate and the bill-to address points elsewhere.\n"
         "- Do not convert visible Hillwood Commons II evidence into Heritage Commons II / HC2 unless the source visibly says Heritage Commons II or HC2; when Hillwood Commons II / HWC2 is a candidate, prefer it for visible Hillwood Commons II evidence.\n"
         "- Treat visible Alliance Gateway shorthand such as AG31, AG 31, or AG-31 as evidence for the corresponding Alliance Gateway 31 candidate when that candidate is present in the dataset; use the candidate's configured asset_alias and never invent a missing candidate.\n"
+        "- Treat clear semantic near-name evidence as disambiguating when exactly one provided candidate fits the visible phrase, including missing common prefixes, suffix variants, number-format variants, and configured alias variants such as Gateway 15 -> Alliance Gateway 15 / GW15, Circle T Golf Course -> Circle T Golf / CTG, and Heritage Commons 2 -> Heritage Commons II / HC2.\n"
+        "- Do not use vague family names or ambiguous partial names such as Gateway, Circle T, Commons, or Westport to select a candidate when multiple provided candidates could fit.\n"
         "- Prefer Project, Job, Site, Service Location, Location, Deliver To, Ship To, or Property evidence over Bill To when identifying the serviced property.\n"
         "- Bill To or customer-account address evidence may select exactly one active candidate when no property code, property name, tenant, service/site/delivery/shipping/property address, or other stronger evidence identifies a different asset.\n"
         "- Accept a bill-to or customer-account address candidate when its matched_column is address-based, its score is clearly highest, and visible project/property text does not match any provided candidate.\n"
@@ -352,7 +359,9 @@ def _prompt(extraction: ExtractionPayload, alias_mappings: list[dict[str, Any]])
         "- Treat unresolved project, job, or property text as non-conflicting unless it identifies a different configured asset, address, property name, or property code.\n"
         "- Do not return an empty candidate list merely because unresolved project or property text exists. For example, when a project/property label is present, no provided candidate matches that label, and Bill To exactly matches one active asset address such as 9800 Hillwood Parkway, select that address candidate.\n"
         "- Use candidate asset_type only to interpret visible source words such as Retail, Multifamily, Ground Lease, Project, Job, Site, or Service Location; never use it as routing authority.\n"
-        "- If multiple candidates share the same address, use explicit asset name, property name, tenant, or asset-code evidence to choose the one best candidate.\n"
+        "- If multiple candidates share the same address, use explicit extracted evidence such as asset name, property name, tenant/occupant, possible alias, address candidate evidence_text, evidence.summary, or asset-code evidence to choose the one best candidate.\n"
+        "- If shared-address candidates are supported only by the same address and no extracted name/code/tenant/alias evidence distinguishes one candidate, return an empty candidate list.\n"
+        "- Do not choose a shared-address candidate based only on score tie order, asset_type, destination, or candidate list order.\n"
         "- Do not return multiple candidates just because they share an address; return multiple candidates only if the evidence truly supports multiple assets equally, which deterministic code will treat as ambiguous.\n"
         f"Input:\n{json.dumps(payload, indent=2, sort_keys=True)}\n"
     )
@@ -386,6 +395,11 @@ def _batch_prompt(requests: list[tuple[str, ExtractionPayload, list[dict[str, An
                     "business_unit_code": extraction.business_signals.business_unit_code,
                     "possible_property_aliases": list(extraction.business_signals.possible_property_aliases),
                 },
+                "evidence": {
+                    "summary": extraction.evidence.summary,
+                    "source_attachments": list(extraction.evidence.source_attachments),
+                    "source_pages": list(extraction.evidence.source_pages),
+                },
                 "dataset": [_candidate_payload(row) for row in alias_mappings],
             }
         )
@@ -412,12 +426,18 @@ def _batch_prompt(requests: list[tuple[str, ExtractionPayload, list[dict[str, An
         "- Prefer explicit visible asset or property name evidence over conflicting bill-to address evidence when the name selects a candidate and the bill-to address points elsewhere.\n"
         "- Do not convert visible Hillwood Commons II evidence into Heritage Commons II / HC2 unless the source visibly says Heritage Commons II or HC2; when Hillwood Commons II / HWC2 is a candidate, prefer it for visible Hillwood Commons II evidence.\n"
         "- Treat visible Alliance Gateway shorthand such as AG31, AG 31, or AG-31 as evidence for the corresponding Alliance Gateway 31 candidate when that candidate is present in the dataset; use the candidate's configured asset_alias and never invent a missing candidate.\n"
+        "- Treat clear semantic near-name evidence as disambiguating when exactly one provided candidate fits the visible phrase, including missing common prefixes, suffix variants, number-format variants, and configured alias variants such as Gateway 15 -> Alliance Gateway 15 / GW15, Circle T Golf Course -> Circle T Golf / CTG, and Heritage Commons 2 -> Heritage Commons II / HC2.\n"
+        "- Do not use vague family names or ambiguous partial names such as Gateway, Circle T, Commons, or Westport to select a candidate when multiple provided candidates could fit.\n"
         "- Prefer Project, Job, Site, Service Location, Location, Deliver To, Ship To, or Property evidence over Bill To when identifying the serviced property.\n"
         "- Bill To or customer-account address evidence may select exactly one active candidate when no property code, property name, tenant, service/site/delivery/shipping/property address, or other stronger evidence identifies a different asset.\n"
         "- Accept a bill-to or customer-account address candidate when its matched_column is address-based, its score is clearly highest, and visible project/property text does not match any provided candidate.\n"
         "- Do not reject a bill-to-only address match solely because it is Bill To; cite the bill-to address evidence when it is the only clear active property candidate above the provided score threshold.\n"
         "- Treat unresolved project, job, or property text as non-conflicting unless it identifies a different configured asset, address, property name, or property code.\n"
         "- Do not return an empty candidate list merely because unresolved project or property text exists. For example, when a project/property label is present, no provided candidate matches that label, and Bill To exactly matches one active asset address such as 9800 Hillwood Parkway, select that address candidate.\n"
+        "- Compare extracted property code, property name, tenant, possible aliases, evidence.summary, address_candidates[].evidence_text, service/property/site address, bill-to, and every candidate.\n"
+        "- If multiple candidates share the same address, use explicit extracted evidence such as asset name, property name, tenant/occupant, possible alias, address candidate evidence_text, evidence.summary, or asset-code evidence to choose the one best candidate.\n"
+        "- If shared-address candidates are supported only by the same address and no extracted name/code/tenant/alias evidence distinguishes one candidate, return an empty candidate list.\n"
+        "- Do not choose a shared-address candidate based only on score tie order, asset_type, destination, or candidate list order.\n"
         "- Do not return multiple candidates just because they share an address; return multiple candidates only if the evidence truly supports multiple assets equally.\n"
         f"Input:\n{json.dumps({'items': items}, indent=2, sort_keys=True)}\n"
     )

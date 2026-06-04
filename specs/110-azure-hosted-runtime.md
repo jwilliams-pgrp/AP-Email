@@ -86,6 +86,7 @@ Required behavior:
 - The Logic App recurrence trigger must limit concurrent runs to 1.
 - Each recurrence must call the Function App intake endpoint.
 - Each Function invocation must pull and process at most one available Outlook inbox email.
+- Processing failures must wait 30 seconds and retry the same email once before reporting final failure.
 - Repeated recurrences continue processing the inbox until no message is available.
 - The Function endpoint must reject unauthorized callers in Azure.
 - Disabling intake must be controlled by deployment configuration, not code changes.
@@ -136,4 +137,5 @@ Parameter files must contain placeholders only.
 - Logic App recurrence calls the Function intake endpoint every 30 seconds by default.
 - Logic App recurrence does not start overlapping intake runs.
 - Function intake invocation returns an explicit empty/disabled/processed status.
+- Function intake processing retries one failed processing attempt after 30 seconds, then reports failure if the retry also fails.
 - Secret hygiene tests fail if tracked source or docs contain obvious real secrets.

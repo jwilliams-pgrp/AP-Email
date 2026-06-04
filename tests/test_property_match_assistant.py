@@ -70,6 +70,73 @@ class PropertyMatchAssistantTests(unittest.TestCase):
         self.assertIn("Heritage Commons III", prompt)
         self.assertIn("possible_property_aliases", prompt)
         self.assertIn("property_lookup", prompt)
+        self.assertIn("evidence.summary", prompt)
+
+    def test_prompt_passes_extraction_evidence_for_shared_address_disambiguation(self) -> None:
+        assistant = PropertyMatchAssistant(FakeLlmExtractor(_interpretation_payload("asset-CTG", asset_alias="CTG")))
+
+        assistant.suggest(
+            validate_extraction(
+                _payload(
+                    property_code=None,
+                    property_name=None,
+                    service_address="2451 WESTLAKE PKWY WESTLAKE TX 76262",
+                    possible_property_aliases=["circle t golf", "64 acres"],
+                    evidence_summary="Visible trailing customer block says Hillwood Alliance Group, LP Circle T Golf at 2451 Westlake Pkwy.",
+                    property_lookup={
+                        "property_code": [],
+                        "property_name": [],
+                        "tenant": [],
+                        "address": ["2451 westlake parkway", "2451 westlake parkway westlake tx 76262"],
+                        "suite": [],
+                        "city": ["westlake"],
+                        "state": ["tx"],
+                        "zipcode": ["76262"],
+                        "address_candidates": [
+                            {
+                                "rank": 1,
+                                "label": "ship_to",
+                                "street": "2451 westlake parkway",
+                                "city": "westlake",
+                                "state": "tx",
+                                "zipcode": "76262",
+                                "normalized_address": "2451 westlake parkway westlake tx 76262",
+                                "source": "attachment:siteone.pdf:1",
+                                "confidence": 0.92,
+                                "evidence_text": "SHIP TO: HILLWOOD ALLIANCE GROUP, LP CIRCLE T GOLF 2451 WESTLAKE PKWY",
+                            }
+                        ],
+                    },
+                )
+            ),
+            [
+                {
+                    **_alias("CTR"),
+                    "asset_id": "asset-CTR",
+                    "asset_alias": "CTR",
+                    "asset_name": "Circle T Ranch",
+                    "matched_column": "address_components",
+                    "matched_text": "2451 westlake parkway roanoke texas 76262",
+                    "similarity_score": 0.6067,
+                },
+                {
+                    **_alias("CTG"),
+                    "asset_id": "asset-CTG",
+                    "asset_alias": "CTG",
+                    "asset_name": "Circle T Golf Course",
+                    "matched_column": "address_components",
+                    "matched_text": "2451 westlake parkway roanoke texas 76262",
+                    "similarity_score": 0.6067,
+                },
+            ],
+        )
+
+        prompt = assistant.llm_extractor.prompt
+        self.assertIn("\"evidence\"", prompt)
+        self.assertIn("Circle T Golf", prompt)
+        self.assertIn("SHIP TO: HILLWOOD ALLIANCE GROUP, LP CIRCLE T GOLF", prompt)
+        self.assertIn("If shared-address candidates are supported only by the same address", prompt)
+        self.assertIn("Do not choose a shared-address candidate based only on score tie order", prompt)
 
     def test_prompt_prefers_visible_hillwood_commons_name_over_conflicting_bill_to(self) -> None:
         assistant = PropertyMatchAssistant(FakeLlmExtractor(_interpretation_payload("asset-HWC2", asset_alias="HWC2")))
@@ -134,6 +201,43 @@ class PropertyMatchAssistantTests(unittest.TestCase):
         self.assertIn("Alliance Gateway shorthand such as AG31, AG 31, or AG-31", prompt)
         self.assertIn("Alliance Gateway 31", prompt)
         self.assertIn("\"asset_alias\": \"GW31\"", prompt)
+
+    def test_prompt_treats_unique_near_name_as_disambiguating_evidence(self) -> None:
+        assistant = PropertyMatchAssistant(FakeLlmExtractor(_interpretation_payload("asset-GW15", asset_alias="GW15")))
+
+        assistant.suggest(
+            validate_extraction(
+                _payload(
+                    property_code=None,
+                    property_name=None,
+                    possible_property_aliases=["gateway 15"],
+                    evidence_summary="Invoice property field says Gateway 15.",
+                    property_lookup={
+                        "property_code": [],
+                        "property_name": [],
+                        "tenant": [],
+                        "address": [],
+                        "suite": [],
+                        "city": [],
+                        "state": [],
+                        "zipcode": [],
+                    },
+                )
+            ),
+            [
+                {**_alias("GW15"), "asset_id": "asset-GW15", "asset_alias": "GW15", "asset_name": "Alliance Gateway 15"},
+                {**_alias("GW14"), "asset_id": "asset-GW14", "asset_alias": "GW14", "asset_name": "Alliance Gateway 14"},
+            ],
+        )
+
+        prompt = assistant.llm_extractor.prompt
+        self.assertIn("clear semantic near-name evidence", prompt)
+        self.assertIn("Gateway 15 -> Alliance Gateway 15 / GW15", prompt)
+        self.assertIn("Circle T Golf Course -> Circle T Golf / CTG", prompt)
+        self.assertIn("Heritage Commons 2 -> Heritage Commons II / HC2", prompt)
+        self.assertIn("vague family names or ambiguous partial names", prompt)
+        self.assertIn("Gateway 15", prompt)
+        self.assertIn("\"asset_name\": \"Alliance Gateway 15\"", prompt)
 
     def test_property_match_assistant_allows_check_request_review(self) -> None:
         assistant = PropertyMatchAssistant(FakeLlmExtractor(_interpretation_payload("asset-GW31", asset_alias="GW31")))

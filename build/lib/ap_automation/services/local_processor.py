@@ -3,8 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ap_automation.agents.property_match_assistant import CachedPropertyMatchReviewer, PropertyMatchAssistant
 from ap_automation.models.decision import Decision, Destination, WorkflowRule
@@ -48,6 +49,8 @@ class _FixturePropertyMatchReviewer:
 class LocalProcessor:
     """Runs the LOCAL processing pipeline using Azure OpenAI or fixture extraction."""
 
+    retry_delay_seconds = 30.0
+
     def __init__(
         self,
         project_root: Path,
@@ -69,24 +72,102 @@ class LocalProcessor:
         self._pdf_evaluator = PdfAttachmentEvaluator(project_root)
         self._extractor_selector = DocumentExtractorSelector()
         self._document_intelligence_analyzer = document_intelligence_analyzer or DocumentIntelligenceAttachmentAnalyzer(project_root, artifact_store=self._artifacts)
+        self._current_run_id: str | None = None
+        self._current_run_marked_failed = False
 
     def process_fixture(self, source_email_path: Path, extraction_fixture_path: Path) -> str:
-        return self._process(source_email_path, extraction_fixture_path)
+        return self._process_with_retry(
+            lambda: self._process(source_email_path, extraction_fixture_path),
+            {
+                "source_system": "local_file",
+                "source_path": _relative(source_email_path),
+                "fixture_path": _relative(extraction_fixture_path),
+            },
+        )
 
     def process_email(self, source_email_path: Path) -> str:
-        return self._process(source_email_path, None)
+        return self._process_with_retry(
+            lambda: self._process(source_email_path, None),
+            {"source_system": "local_file", "source_path": _relative(source_email_path)},
+        )
 
     def process_graph_email(self, envelope: GraphMessageEnvelope, extraction_fixture_path: Path | None = None) -> str:
-        return self._process(
-            source_email_path=None,
-            extraction_fixture_path=extraction_fixture_path,
-            parsed_msg_override=envelope.parsed_msg,
-            source_system_override="graph_mailbox",
-            source_message_id_override=envelope.message_id,
-            graph_categories=envelope.categories,
-            internet_message_id=envelope.internet_message_id,
-            office_web_link=envelope.web_link,
+        return self._process_with_retry(
+            lambda: self._process(
+                source_email_path=None,
+                extraction_fixture_path=extraction_fixture_path,
+                parsed_msg_override=envelope.parsed_msg,
+                source_system_override="graph_mailbox",
+                source_message_id_override=envelope.message_id,
+                graph_categories=envelope.categories,
+                internet_message_id=envelope.internet_message_id,
+                office_web_link=envelope.web_link,
+            ),
+            {
+                "source_system": "graph_mailbox",
+                "source_message_id": envelope.message_id,
+                "internet_message_id": envelope.internet_message_id,
+                "fixture_path": _relative(extraction_fixture_path),
+            },
         )
+
+    def _process_with_retry(self, operation: Callable[[], str], context: dict[str, Any]) -> str:
+        last_exc: Exception | None = None
+        for attempt in (1, 2):
+            self._current_run_id = None
+            self._current_run_marked_failed = False
+            try:
+                return operation()
+            except Exception as exc:
+                last_exc = exc
+                self._log_processing_failure_attempt(attempt, exc, context)
+                if attempt == 1:
+                    time.sleep(self.retry_delay_seconds)
+                    continue
+                self._mark_current_run_failed("PROCESSING", str(exc))
+                raise
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("Processing retry loop exited without a result or exception.")
+
+    def _log_processing_failure_attempt(self, attempt: int, exc: Exception, context: dict[str, Any]) -> None:
+        payload = {
+            "event": "processing_attempt_failed",
+            "attempt": attempt,
+            "max_attempts": 2,
+            "retry_delay_seconds": self.retry_delay_seconds if attempt == 1 else None,
+            "exception_type": exc.__class__.__name__,
+            "error": str(exc),
+            **{key: value for key, value in context.items() if value is not None},
+        }
+        print(json.dumps(payload, sort_keys=True), flush=True)
+
+    def _mark_current_run_failed(self, failed_step: str, error: str) -> None:
+        if not self._current_run_id or self._current_run_marked_failed:
+            return
+        try:
+            trace_path = self._fail_run(self._current_run_id, failed_step, error)
+            self._operational_repository.add_audit_step(
+                self._current_run_id,
+                "FINALIZE",
+                {"run_id": self._current_run_id},
+                {"trace_artifact_path": trace_path, "final_outcome": None, "status": "failed"},
+                reason="Processing failed after retry.",
+                error=error,
+            )
+        except Exception as finalize_exc:
+            print(
+                json.dumps(
+                    {
+                        "event": "processing_failure_finalize_failed",
+                        "run_id": self._current_run_id,
+                        "exception_type": finalize_exc.__class__.__name__,
+                        "error": str(finalize_exc),
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
 
     def _extraction_attempt(
         self,
@@ -221,6 +302,7 @@ class LocalProcessor:
             email_metadata
         )
         run_id = self._operational_repository.create_audit_run(email_id, {"mode": "LOCAL"})
+        self._current_run_id = run_id
         self._operational_repository.add_audit_step(
             run_id,
             "INGESTION",
@@ -766,6 +848,8 @@ class LocalProcessor:
     def _fail_run(self, run_id: str, failed_step: str, error: str) -> str:
         trace_path = self._artifacts.write_failure_trace(run_id, failed_step, error)
         self._operational_repository.fail_audit_run(run_id, error, trace_path)
+        if run_id == self._current_run_id:
+            self._current_run_marked_failed = True
         return trace_path
 
     def _save_azure_openai_interaction(
@@ -1194,7 +1278,9 @@ def _mixed_destination_rule(workflow_rules: list[WorkflowRule]) -> WorkflowRule:
     raise ValueError("No fallback rule is available for mixed document item aggregation.")
 
 
-def _relative(path: Path) -> str:
+def _relative(path: Path | None) -> str | None:
+    if path is None:
+        return None
     try:
         return path.resolve().relative_to(Path.cwd().resolve()).as_posix()
     except ValueError:

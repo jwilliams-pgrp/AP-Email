@@ -16,6 +16,13 @@ from test_decision_engine import InMemoryPolicyRepository, _payload
 
 
 class LocalProcessorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._retry_delay_seconds = LocalProcessor.retry_delay_seconds
+        LocalProcessor.retry_delay_seconds = 0
+
+    def tearDown(self) -> None:
+        LocalProcessor.retry_delay_seconds = self._retry_delay_seconds
+
     def test_process_fixture_writes_audit_trace_and_action_plan(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -947,6 +954,113 @@ class LocalProcessorTests(unittest.TestCase):
             finalize_step = operational_repository.steps[-1]
             self.assertEqual(finalize_step["step_type"], "FINALIZE")
             self.assertEqual(finalize_step["output_summary"]["status"], "failed")
+
+    def test_processing_retries_once_after_transient_failure(self) -> None:
+        class TransientUpsertFailureRepository(InMemoryOperationalRepository):
+            def __init__(self) -> None:
+                super().__init__()
+                self.upsert_attempts = 0
+
+            def upsert_email(self, metadata: dict[str, Any]) -> str:
+                self.upsert_attempts += 1
+                if self.upsert_attempts == 1:
+                    raise RuntimeError("temporary postgres failure")
+                return super().upsert_email(metadata)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_email = root / "local" / "ingest" / "sample.eml"
+            fixture = root / "tests" / "fixtures" / "extractions" / "sample.json"
+            source_email.parent.mkdir(parents=True)
+            fixture.parent.mkdir(parents=True)
+            source_email.write_text("sample email", encoding="utf-8")
+            fixture.write_text(json.dumps(_payload()), encoding="utf-8")
+
+            operational_repository = TransientUpsertFailureRepository()
+            processor = LocalProcessor(root, InMemoryPolicyRepository(), operational_repository)
+
+            with patch("ap_automation.services.local_processor.time.sleep") as sleep:
+                run_id = processor.process_fixture(source_email, fixture)
+
+            self.assertEqual(run_id, "run-1")
+            self.assertEqual(operational_repository.upsert_attempts, 2)
+            sleep.assert_called_once_with(0)
+            self.assertEqual(operational_repository.runs[run_id]["status"], "completed")
+
+    def test_processing_marks_second_post_run_failure_failed_when_repository_is_available(self) -> None:
+        class FailingAuditStepRepository(InMemoryOperationalRepository):
+            def add_audit_step(
+                self,
+                run_id: str,
+                step_type: str,
+                input_summary: dict[str, Any],
+                output_summary: dict[str, Any],
+                reason: str | None = None,
+                confidence: float | None = None,
+                decision: dict[str, Any] | None = None,
+                error: str | None = None,
+            ) -> None:
+                if step_type == "INGESTION":
+                    return super().add_audit_step(run_id, step_type, input_summary, output_summary, reason, confidence, decision, error)
+                raise RuntimeError("audit step failed")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_email = root / "local" / "ingest" / "sample.eml"
+            fixture = root / "tests" / "fixtures" / "extractions" / "sample.json"
+            source_email.parent.mkdir(parents=True)
+            fixture.parent.mkdir(parents=True)
+            source_email.write_text("sample email", encoding="utf-8")
+            fixture.write_text(json.dumps(_payload()), encoding="utf-8")
+
+            operational_repository = FailingAuditStepRepository()
+            processor = LocalProcessor(root, InMemoryPolicyRepository(), operational_repository)
+
+            with patch("ap_automation.services.local_processor.time.sleep") as sleep:
+                with self.assertRaisesRegex(RuntimeError, "audit step failed"):
+                    processor.process_fixture(source_email, fixture)
+
+            sleep.assert_called_once_with(0)
+            self.assertEqual(operational_repository.runs["run-1"]["status"], "failed")
+            self.assertIn("audit step failed", operational_repository.runs["run-1"]["error"])
+
+    def test_processing_does_not_mask_original_failure_when_failure_marking_cannot_persist(self) -> None:
+        class FailingAuditStepAndFailRunRepository(InMemoryOperationalRepository):
+            def add_audit_step(
+                self,
+                run_id: str,
+                step_type: str,
+                input_summary: dict[str, Any],
+                output_summary: dict[str, Any],
+                reason: str | None = None,
+                confidence: float | None = None,
+                decision: dict[str, Any] | None = None,
+                error: str | None = None,
+            ) -> None:
+                if step_type == "INGESTION":
+                    return super().add_audit_step(run_id, step_type, input_summary, output_summary, reason, confidence, decision, error)
+                raise RuntimeError("audit step failed")
+
+            def fail_audit_run(self, run_id: str, error: str, trace_artifact_path: str | None = None) -> None:
+                raise RuntimeError("postgres unavailable")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_email = root / "local" / "ingest" / "sample.eml"
+            fixture = root / "tests" / "fixtures" / "extractions" / "sample.json"
+            source_email.parent.mkdir(parents=True)
+            fixture.parent.mkdir(parents=True)
+            source_email.write_text("sample email", encoding="utf-8")
+            fixture.write_text(json.dumps(_payload()), encoding="utf-8")
+
+            operational_repository = FailingAuditStepAndFailRunRepository()
+            processor = LocalProcessor(root, InMemoryPolicyRepository(), operational_repository)
+
+            with patch("ap_automation.services.local_processor.time.sleep"):
+                with self.assertRaisesRegex(RuntimeError, "audit step failed"):
+                    processor.process_fixture(source_email, fixture)
+
+            self.assertEqual(operational_repository.runs["run-1"]["status"], "started")
 
     def test_property_matching_does_not_bypass_missing_required_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1932,6 +2046,43 @@ class LocalProcessorTests(unittest.TestCase):
             )
             action_step = next(step for step in operational_repository.steps if step["step_type"] == "ACTION")
             self.assertIn("graph_result", action_step["output_summary"])
+
+    def test_graph_intake_processes_without_extraction_fixture(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            operational_repository = InMemoryOperationalRepository()
+            processor = LocalProcessor(
+                root,
+                InMemoryPolicyRepository(),
+                operational_repository,
+                llm_extractor=FakeAzureOpenAIExtractor(_payload()),
+                graph_mailbox=FakeGraphMailboxClient(),
+                document_intelligence_analyzer=FakeDocumentIntelligenceAnalyzer(),
+            )
+            envelope = FakeGraphMessageEnvelope(
+                message_id="claimed-processing-msg-1",
+                categories=("Inbox",),
+                internet_message_id="<internet-id-1>",
+                web_link="https://outlook.office.com/mail/processing/id/claimed-processing-msg-1",
+            )
+            envelope.parsed_msg = ParsedMsg(
+                subject="Invoice 100",
+                sender_email="vendor@example.com",
+                sender_name="Vendor",
+                received_at=None,
+                body_text="Invoice for 100 Main",
+                transport_headers=None,
+                attachments=(),
+                metadata={"parser": "graph_api"},
+            )
+
+            run_id = processor.process_graph_email(envelope)
+
+            self.assertEqual(operational_repository.runs[run_id]["status"], "completed")
+            self.assertEqual(
+                operational_repository.emails["email-1"]["idempotency_key"],
+                "graph_mailbox:<internet-id-1>",
+            )
 
     def test_graph_intake_idempotency_falls_back_to_claimed_message_id(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

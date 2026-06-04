@@ -1472,6 +1472,71 @@ class DecisionEngineGoldenScenarioTests(unittest.TestCase):
         self.assertEqual(decision.destination_code, "MEDIUS_PROPERTIES")
         self.assertEqual(decision.routing_match["property_match"]["property_code"], "CTR")
 
+    def test_near_name_normalized_property_lookup_routes_to_unique_asset(self) -> None:
+        repository = InMemoryPolicyRepository()
+        repository.properties["GW14"] = PropertyMatch("asset-GW14", "GW14", "Alliance Gateway 14", "hillwood_owned", "Hillwood", "industrial", "PROP", "MEDIUS_PROPERTIES")
+        repository.properties["GW15"] = PropertyMatch("asset-GW15", "GW15", "Alliance Gateway 15", "hillwood_owned", "Hillwood", "industrial", "PROP", "MEDIUS_PROPERTIES")
+        reviewer = FakePropertyMatchReviewer(selected_asset_id="asset-GW15")
+        extraction = validate_extraction(
+            _payload(
+                property_code=None,
+                property_name=None,
+                service_address=None,
+                property_lookup={
+                    "property_code": ["gw15"],
+                    "property_name": ["alliance gateway 15"],
+                    "tenant": [],
+                    "address": [],
+                    "suite": [],
+                    "city": [],
+                    "state": [],
+                    "zipcode": [],
+                },
+                possible_property_aliases=["gateway 15"],
+                evidence_summary="Visible Property field says Gateway 15; extraction normalized it to Alliance Gateway 15 / GW15.",
+            )
+        )
+
+        decision = DecisionEngine(repository, property_match_reviewer=reviewer).decide(extraction, "key").decision
+
+        self.assertEqual(decision.outcome, "AUTO")
+        self.assertEqual(decision.destination_code, "MEDIUS_PROPERTIES")
+        self.assertEqual(decision.routing_match["property_match"]["property_code"], "GW15")
+        self.assertEqual(decision.routing_match["property_gate"]["llm_selected_asset_id"], "asset-GW15")
+
+    def test_vague_family_name_remains_unmatched_when_reviewer_is_ambiguous(self) -> None:
+        repository = InMemoryPolicyRepository()
+        repository.properties["GW14"] = PropertyMatch("asset-GW14", "GW14", "Alliance Gateway 14", "hillwood_owned", "Hillwood", "industrial", "PROP", "MEDIUS_PROPERTIES")
+        repository.properties["GW15"] = PropertyMatch("asset-GW15", "GW15", "Alliance Gateway 15", "hillwood_owned", "Hillwood", "industrial", "PROP", "MEDIUS_PROPERTIES")
+        extraction = validate_extraction(
+            _payload(
+                property_code=None,
+                property_name=None,
+                service_address=None,
+                property_lookup={
+                    "property_code": [],
+                    "property_name": [],
+                    "tenant": [],
+                    "address": [],
+                    "suite": [],
+                    "city": [],
+                    "state": [],
+                    "zipcode": [],
+                },
+                possible_property_aliases=["gateway"],
+                evidence_summary="Visible text only says Gateway.",
+            )
+        )
+
+        decision = DecisionEngine(
+            repository,
+            property_match_reviewer=FakeAmbiguousPropertyMatchReviewer(("asset-GW14", "asset-GW15")),
+        ).decide(extraction, "key").decision
+
+        self.assertEqual(decision.outcome, "ESCALATE")
+        self.assertEqual(decision.destination_code, "ESCALATE_UNMATCHED_BUILDING")
+        self.assertEqual(decision.routing_match["property_gate"]["reason"], "LLM final property review selected zero or multiple candidates")
+
     def test_tenant_assisted_match_routes_auto(self) -> None:
         decision = self._decide(property_code=None, property_name=None, bill_to="Nuveen")
         self.assertEqual(decision.outcome, "AUTO")
@@ -1732,6 +1797,15 @@ class FakePropertyMatchReviewer:
             return None
         selected_asset_id = self.selected_asset_id or str(alias_mappings[0]["asset_id"])
         return FakePropertyMatchSuggestion((selected_asset_id,), self.confidence)
+
+
+class FakeAmbiguousPropertyMatchReviewer:
+    def __init__(self, selected_asset_ids: tuple[str, ...], confidence: float = 0.60) -> None:
+        self.selected_asset_ids = selected_asset_ids
+        self.confidence = confidence
+
+    def suggest(self, extraction, alias_mappings: list[dict[str, Any]]):
+        return FakePropertyMatchSuggestion(self.selected_asset_ids, self.confidence)
 
 
 class FakePropertyMatchSuggestion:

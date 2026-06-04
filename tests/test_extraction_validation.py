@@ -967,14 +967,20 @@ class ExtractionValidationTests(unittest.TestCase):
             "Final source-support check before returning JSON",
             "The asset_reference list is not source evidence for this check",
             "Canonical property codes and names may be populated only when visibly supported",
-            "Labeled identity fields such as Project, Job, Site, Location, Service Location, Property, Building, Ship To, Deliver To",
-            "When the value following one of these labels visibly matches an asset_reference asset_name or asset_alias",
+            "Labeled identity fields such as Project, Job, Site, Location, Service Location, Property, Building",
+            "Facility, Work Site",
+            "Sold To, Customer, Account, Attention",
+            "Do not limit property evidence capture to Bill To or Ship To blocks",
+            "Hillwood Alliance Group, LP Circle T Golf 2451 Westlake Pkwy",
+            "preserve \"Circle T Golf\"",
+            "When the value following one of these labels visibly matches or clearly near-matches an asset_reference asset_name or asset_alias",
             "Do not drop or demote a visible labeled Project, Job, Site, Location, or Property value solely because address evidence is incomplete, city-mismatched, ZIP-missing, or shared by multiple assets",
             'Project Circle T Ranch',
             'property_lookup.property_name=["circle t ranch"]',
             'property_lookup.property_code=["ctr"]',
             "If a Project or Job value is a generic work description",
-            "scan selected attachment text for labels Project, Job, Site, Location, Service Location, Property, Building, Ship To, and Deliver To",
+            "scan selected attachment text for labels Project, Job, Site, Location, Service Location, Property, Building",
+            "adjacent repeated customer/address blocks",
             "Visible addresses should become address candidates first",
             "do not invent property codes or property names from address resemblance alone",
             "Do not put account, customer, or tenant names into invoice.property_code",
@@ -1094,6 +1100,11 @@ class ExtractionValidationTests(unittest.TestCase):
         self.assertIn("not routing authority", prompt)
         self.assertIn("Use asset_type only to normalize source-visible property text", prompt)
         self.assertIn("Prefer Project, Job, Site, Service Location", prompt)
+        self.assertIn("clear semantic near-match to exactly one listed asset", prompt)
+        self.assertIn("Gateway 15 -> Alliance Gateway 15 / GW15", prompt)
+        self.assertIn("Circle T Golf Course -> Circle T Golf / CTG", prompt)
+        self.assertIn("Heritage Commons 2 -> Heritage Commons II / HC2", prompt)
+        self.assertIn("vague family names or ambiguous partial names", prompt)
         self.assertIn('property_lookup.property_name=["alliance gateway 34"]', prompt)
         self.assertIn('property_lookup.property_code=["gw34"]', prompt)
         self.assertIn("If visible source text does not match asset_reference", prompt)
@@ -1102,6 +1113,10 @@ class ExtractionValidationTests(unittest.TestCase):
         self.assertIn("Alliance Gateway shorthand such as AG31, AG 31, or AG-31", prompt)
         self.assertIn("normalize to the listed asset_reference asset_name and configured asset_alias", prompt)
         self.assertIn("Final source-support check before returning JSON", prompt)
+        self.assertIn("Do not limit property evidence capture to Bill To or Ship To blocks", prompt)
+        self.assertIn("Circle T Golf", prompt)
+        self.assertIn("Facility, Work Site", prompt)
+        self.assertIn("Sold To, Customer, Account, and Attention", prompt)
         self.assertIn("verify every invoice.property_code, invoice.property_name, property_lookup.property_code, and property_lookup.property_name", prompt)
         self.assertIn("email subject, email body, selected attachment text, or attachment metadata", prompt)
         self.assertIn("The asset_reference list is not source evidence for this check", prompt)
@@ -1133,6 +1148,39 @@ class ExtractionValidationTests(unittest.TestCase):
         self.assertIn('property_lookup.property_code=["tower"]', prompt)
         self.assertIn("Final silent self-check before returning JSON", prompt)
         self.assertIn("verify asset_reference was used only for normalization", prompt)
+
+    def test_azure_openai_prompt_generalizes_near_name_asset_normalization(self) -> None:
+        prompt = _prompt(
+            ParsedMsg(
+                subject="Invoice for Gateway 15",
+                sender_email="vendor@example.com",
+                sender_name="Vendor",
+                received_at=None,
+                body_text="Property: Gateway 15\nProject: Heritage Commons 2\nSite: Circle T Golf Course",
+                transport_headers=None,
+                attachments=(),
+                metadata={},
+            ),
+            [],
+            asset_reference_rows=[
+                {"asset_name": "Alliance Gateway 15", "asset_alias": "GW15", "asset_type": "Industrial", "address": None},
+                {"asset_name": "Circle T Golf", "asset_alias": "CTG", "asset_type": None, "address": None},
+                {"asset_name": "Heritage Commons II", "asset_alias": "HC2", "asset_type": "Office", "address": None},
+            ],
+        )
+
+        self.assertIn("Gateway 15", prompt)
+        self.assertIn('"asset_name": "Alliance Gateway 15"', prompt)
+        self.assertIn('"asset_alias": "GW15"', prompt)
+        self.assertIn('"asset_name": "Circle T Golf"', prompt)
+        self.assertIn('"asset_alias": "CTG"', prompt)
+        self.assertIn('"asset_name": "Heritage Commons II"', prompt)
+        self.assertIn('"asset_alias": "HC2"', prompt)
+        self.assertIn("missing common portfolio prefixes", prompt)
+        self.assertIn("suffix variants", prompt)
+        self.assertIn("number-format variants", prompt)
+        self.assertIn("when only one asset_reference row fits the visible phrase", prompt)
+        self.assertIn("business_signals.possible_property_aliases", prompt)
 
     def test_contract_repair_prompt_tells_llm_to_remove_non_address_candidates(self) -> None:
         repair_prompt = contract_repair_prompt(

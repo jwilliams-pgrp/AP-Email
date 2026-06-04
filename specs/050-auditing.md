@@ -145,6 +145,11 @@ Failed processing attempts must not remain in `started` status. When a run fails
 - write a `FINALIZE` audit step with `status=failed`
 - update the audit run to `status=failed` with `completed_at` populated
 
+Processing failures must retry once before becoming final:
+- On the first processing exception, log the attempt failure, wait 30 seconds, and retry the same email once.
+- On the second processing exception, mark the known audit run as failed when Postgres is reachable.
+- If Postgres is unavailable and cannot record the failure, preserve the runtime exception so the host reports the invocation failure.
+
 ## Visual Trace Artifact
 
 The system should produce a local visual trace artifact for debugging, such as Mermaid text or rendered diagram output.
