@@ -9,7 +9,7 @@ from typing import Any, Callable
 
 from ap_automation.agents.property_match_assistant import CachedPropertyMatchReviewer, PropertyMatchAssistant
 from ap_automation.models.decision import Decision, Destination, WorkflowRule
-from ap_automation.models.extraction import DocumentItem, ExcludedAttachment, ExtractionValidationError, validate_extraction_batch
+from ap_automation.models.extraction import DocumentItem, ExcludedAttachment, ExtractionValidationError, validate_extraction_batch, validate_extraction_triage_batch
 from ap_automation.repositories.protocols import OperationalRepository, PolicyRepository
 from ap_automation.services.azure_openai_extractor import (
     AzureOpenAIExtractionError,
@@ -190,7 +190,70 @@ class LocalProcessor:
             )
         if parsed_msg is None:
             raise ValueError("Azure OpenAI extraction without a fixture currently requires a .msg source email.")
-        return self._llm_extractor.extract_msg(parsed_msg, attachment_records, asset_reference_rows=asset_reference_rows)
+        triage_attempt = self._triage_attempt(parsed_msg, attachment_records)
+        try:
+            triage_batch = validate_extraction_triage_batch(triage_attempt.parsed_payload)
+        except ExtractionValidationError as exc:
+            if triage_attempt.attempts:
+                raise
+            repair_prompt = contract_repair_prompt(
+                original_prompt=triage_attempt.prompt or "",
+                invalid_response=triage_attempt.raw_response,
+                errors=exc.errors,
+                contract_name="extraction_triage_batch.v1",
+            )
+            result = self._llm_extractor.run_json_prompt(repair_prompt)
+            raw_output, parsed_payload = result
+            retry_attempt = ExtractionAttempt(
+                parsed_payload=parsed_payload,
+                prompt=triage_attempt.prompt,
+                raw_response=raw_output,
+                extractor_type=triage_attempt.extractor_type,
+                model=triage_attempt.model,
+                prompt_version=triage_attempt.prompt_version,
+                deployment_name=getattr(result, "deployment_name", triage_attempt.deployment_name),
+                api_version=getattr(result, "api_version", triage_attempt.api_version),
+                request_parameters=getattr(result, "request_parameters", triage_attempt.request_parameters),
+                raw_usage=getattr(result, "raw_usage", triage_attempt.raw_usage),
+                prompt_tokens=getattr(result, "prompt_tokens", triage_attempt.prompt_tokens),
+                completion_tokens=getattr(result, "completion_tokens", triage_attempt.completion_tokens),
+                total_tokens=getattr(result, "total_tokens", triage_attempt.total_tokens),
+                cached_prompt_tokens=getattr(result, "cached_prompt_tokens", triage_attempt.cached_prompt_tokens),
+                reasoning_tokens=getattr(result, "reasoning_tokens", triage_attempt.reasoning_tokens),
+                latency_ms=getattr(result, "latency_ms", triage_attempt.latency_ms),
+                attempts=(
+                    {
+                        "attempt": 1,
+                        "status": "validation_failed",
+                        "validation_errors": exc.errors,
+                        "raw_response": triage_attempt.raw_response,
+                        "parsed_output": triage_attempt.parsed_payload,
+                    },
+                    {
+                        "attempt": 2,
+                        "status": "retry_response",
+                        "retry_reason": "triage_schema_validation_failed",
+                        "raw_response": raw_output,
+                        "parsed_output": parsed_payload,
+                    },
+                ),
+            )
+            triage_attempt = retry_attempt
+            triage_batch = validate_extraction_triage_batch(triage_attempt.parsed_payload)
+        detail_attempt = self._llm_extractor.extract_msg_with_triage(
+            parsed_msg,
+            attachment_records,
+            triage_batch,
+            asset_reference_rows=asset_reference_rows,
+        )
+        return _with_triage_audit(detail_attempt, triage_attempt)
+
+    def _triage_attempt(
+        self,
+        parsed_msg: ParsedMsg,
+        attachment_records: list[dict[str, Any]],
+    ) -> ExtractionAttempt:
+        return self._llm_extractor.triage_msg(parsed_msg, attachment_records)
 
     def _retry_extraction_contract(
         self,
@@ -252,6 +315,7 @@ class LocalProcessor:
             reasoning_tokens=getattr(result, "reasoning_tokens", extraction_attempt.reasoning_tokens),
             latency_ms=getattr(result, "latency_ms", extraction_attempt.latency_ms),
             attempts=attempts,
+            triage=extraction_attempt.triage,
         )
 
     def _process(
@@ -531,7 +595,11 @@ class LocalProcessor:
         raw_payload = extraction_attempt.parsed_payload
         _remove_inline_source_attachments(raw_payload, attachment_records)
         self._apply_deterministic_observed_fact_overrides(raw_payload, parsed_msg, business_attachment_records)
+        _apply_triage_risk_overrides(raw_payload, extraction_attempt.triage)
+        excluded_attachment_normalization = _restore_cited_excluded_attachments(raw_payload)
         normalization = _normalize_azure_extraction_payload(raw_payload) if extraction_attempt.extractor_type == "azure_openai" else {}
+        if excluded_attachment_normalization:
+            normalization = {**normalization, "excluded_attachment_conflicts": excluded_attachment_normalization}
         initial_validation_errors: list[str] = []
         repair_validation_errors: list[str] = []
         contract_lint = lint_extraction_contract(raw_payload) if extraction_attempt.extractor_type == "azure_openai" else {}
@@ -548,7 +616,14 @@ class LocalProcessor:
                     retry_payload = retry_attempt.parsed_payload
                     _remove_inline_source_attachments(retry_payload, attachment_records)
                     self._apply_deterministic_observed_fact_overrides(retry_payload, parsed_msg, business_attachment_records)
+                    _apply_triage_risk_overrides(retry_payload, retry_attempt.triage)
+                    retry_excluded_attachment_normalization = _restore_cited_excluded_attachments(retry_payload)
                     retry_normalization = _normalize_azure_extraction_payload(retry_payload)
+                    if retry_excluded_attachment_normalization:
+                        retry_normalization = {
+                            **retry_normalization,
+                            "excluded_attachment_conflicts": retry_excluded_attachment_normalization,
+                        }
                     batch = validate_extraction_batch(retry_payload)
                     extraction_attempt = retry_attempt
                     raw_payload = retry_payload
@@ -715,6 +790,14 @@ class LocalProcessor:
             self._policy_repository.get_active_workflow_rules(),
             self._policy_repository.get_runtime_config(),
             self._policy_repository.get_destination,
+            [
+                {
+                    "item_kind": entry["item"].item_kind,
+                    "item_key": entry["item"].item_key,
+                    "display_name": entry["item"].display_name,
+                }
+                for entry in item_results
+            ],
         )
         persisted_audit_payload["items"] = [
             {
@@ -1189,12 +1272,16 @@ def _aggregate_item_decisions(
     workflow_rules: list[WorkflowRule],
     runtime_config: dict[str, Any],
     get_destination: Any,
+    item_metadata: list[dict[str, Any]] | None = None,
 ) -> Decision:
     if not item_decisions:
         raise ValueError("Cannot aggregate an empty decision list.")
+    metadata_by_index = item_metadata or [{} for _ in item_decisions]
 
     item_audit = [
         {
+            "item_kind": metadata_by_index[index].get("item_kind"),
+            "item_key": metadata_by_index[index].get("item_key"),
             "outcome": decision.outcome,
             "destination_code": decision.destination_code,
             "matched_rule_code": decision.matched_rule_code,
@@ -1203,28 +1290,30 @@ def _aggregate_item_decisions(
             "confidence": decision.confidence,
             "routing_match": decision.routing_match,
         }
-        for decision in item_decisions
+        for index, decision in enumerate(item_decisions)
     ]
 
-    terminal = [decision for decision in item_decisions if decision.outcome in {"ESCALATE", "FLAG"}]
+    effective_item_decisions = item_decisions
+
+    terminal = [decision for decision in effective_item_decisions if decision.outcome in {"ESCALATE", "FLAG"}]
     if terminal:
         priority_by_rule = {rule.rule_code: rule.priority for rule in workflow_rules}
         winner = sorted(terminal, key=lambda decision: priority_by_rule.get(decision.matched_rule_code, 999999))[0]
         return _decision_with_aggregation(winner, item_audit, "highest_priority_item_escalation")
 
-    signatures = {(decision.outcome, decision.destination_code) for decision in item_decisions}
+    signatures = {(decision.outcome, decision.destination_code) for decision in effective_item_decisions}
     if len(signatures) == 1:
-        winner = item_decisions[0]
-        reason = winner.reason if len(item_decisions) == 1 else f"All {len(item_decisions)} actionable document items resolved to {winner.outcome} {winner.destination_code or 'without destination'}."
+        winner = effective_item_decisions[0]
+        reason = winner.reason if len(effective_item_decisions) == 1 else f"All {len(effective_item_decisions)} actionable document items resolved to {winner.outcome} {winner.destination_code or 'without destination'}."
         return Decision(
             outcome=winner.outcome,
             destination_code=winner.destination_code,
             destination_email=winner.destination_email,
             reason=reason,
-            confidence=min(decision.confidence for decision in item_decisions),
+            confidence=min(decision.confidence for decision in effective_item_decisions),
             matched_rule_code=winner.matched_rule_code,
             matched_rule_version=winner.matched_rule_version,
-            extracted_fields={"items": [decision.extracted_fields for decision in item_decisions]},
+            extracted_fields={"items": [decision.extracted_fields for decision in effective_item_decisions]},
             routing_match={**winner.routing_match, "aggregation": {"mode": "unanimous", "item_decisions": item_audit}},
         )
 
@@ -1236,10 +1325,10 @@ def _aggregate_item_decisions(
         destination_code=destination.destination_code if destination else None,
         destination_email=destination.email_address if destination and destination.send_email else None,
         reason=rule.reason_template,
-        confidence=min(decision.confidence for decision in item_decisions),
+        confidence=min(decision.confidence for decision in effective_item_decisions),
         matched_rule_code=rule.rule_code,
         matched_rule_version=rule.version,
-        extracted_fields={"items": [decision.extracted_fields for decision in item_decisions]},
+        extracted_fields={"items": [decision.extracted_fields for decision in effective_item_decisions]},
         routing_match={"aggregation": {"mode": "mixed_destinations", "item_decisions": item_audit}},
     )
 
@@ -1410,6 +1499,58 @@ def _remove_inline_source_attachments(raw_payload: dict[str, Any], attachment_re
     ]
 
 
+def _restore_cited_excluded_attachments(raw_payload: dict[str, Any]) -> dict[str, Any]:
+    if raw_payload.get("schema_version") != "extraction_batch.v1":
+        return {}
+    raw_items = raw_payload.get("items")
+    excluded_attachments = raw_payload.get("excluded_attachments")
+    if not isinstance(raw_items, list) or not isinstance(excluded_attachments, list) or not excluded_attachments:
+        return {}
+
+    cited_names: set[str] = set()
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        extraction = item.get("extraction")
+        if not isinstance(extraction, dict):
+            continue
+        evidence = extraction.get("evidence")
+        if not isinstance(evidence, dict):
+            continue
+        source_attachments = evidence.get("source_attachments")
+        if not isinstance(source_attachments, list):
+            continue
+        cited_names.update(name for name in source_attachments if isinstance(name, str) and name)
+
+    if not cited_names:
+        return {}
+
+    kept: list[Any] = []
+    restored: list[dict[str, Any]] = []
+    for excluded in excluded_attachments:
+        file_name = excluded.get("file_name") if isinstance(excluded, dict) else None
+        if isinstance(file_name, str) and file_name in cited_names:
+            restored.append(
+                {
+                    "file_name": file_name,
+                    "reason_code": excluded.get("reason_code"),
+                    "source": excluded.get("source"),
+                }
+            )
+            continue
+        kept.append(excluded)
+
+    if not restored:
+        return {}
+
+    raw_payload["excluded_attachments"] = kept
+    return {
+        "status": "cited_excluded_attachments_restored_to_item_evidence",
+        "restored_attachment_count": len(restored),
+        "restored_attachments": restored,
+    }
+
+
 def _normalize_azure_extraction_payload(raw_payload: dict[str, Any]) -> dict[str, Any]:
     removed_paths: list[str] = []
 
@@ -1445,12 +1586,100 @@ def _normalize_azure_extraction_payload(raw_payload: dict[str, Any]) -> dict[str
     }
 
 
+def _apply_triage_risk_overrides(raw_payload: dict[str, Any], triage_audit: dict[str, Any] | None) -> None:
+    if not triage_audit:
+        return
+    triage_payload = triage_audit.get("parsed_output")
+    if not isinstance(triage_payload, dict):
+        return
+    triage_items = triage_payload.get("items")
+    if not isinstance(triage_items, list):
+        return
+    flags_by_item_key = {
+        item.get("item_key"): set(item.get("risk_flags") or [])
+        for item in triage_items
+        if isinstance(item, dict) and isinstance(item.get("item_key"), str) and isinstance(item.get("risk_flags"), list)
+    }
+    if raw_payload.get("schema_version") == "extraction_batch.v1" and isinstance(raw_payload.get("items"), list):
+        for index, item in enumerate(raw_payload["items"]):
+            if not isinstance(item, dict) or not isinstance(item.get("extraction"), dict):
+                continue
+            item_key = item.get("item_key")
+            flags = flags_by_item_key.get(item_key)
+            if flags is None and len(flags_by_item_key) == 1 and len(raw_payload["items"]) == 1:
+                flags = next(iter(flags_by_item_key.values()))
+            _apply_triage_flags_to_extraction(item["extraction"], flags or set())
+        return
+    if len(flags_by_item_key) == 1:
+        _apply_triage_flags_to_extraction(raw_payload, next(iter(flags_by_item_key.values())))
+
+
+def _apply_triage_flags_to_extraction(extraction_payload: dict[str, Any], risk_flags: set[str]) -> None:
+    if not risk_flags:
+        return
+    document = extraction_payload.get("document")
+    observed = extraction_payload.get("observed_facts")
+    if not isinstance(document, dict) or not isinstance(observed, dict):
+        return
+    if "link_only" in risk_flags:
+        document["link_only"] = True
+        observed["mentions_payment_link_only"] = True
+    if "multi_invoice" in risk_flags:
+        detailed_rejected_multi_invoice = document.get("multi_invoice") is False and observed.get("indicates_multiple_invoices") is False
+        if not detailed_rejected_multi_invoice:
+            document["multi_invoice"] = True
+            observed["indicates_multiple_invoices"] = True
+    if "separate_supporting_document" in risk_flags:
+        observed["mentions_separate_backup_document"] = True
+    if "contract_or_pay_application" in risk_flags:
+        observed["indicates_contract_or_pay_application"] = True
+    if "vendor_question_or_payment_inquiry" in risk_flags:
+        observed["indicates_vendor_question_or_payment_inquiry"] = True
+    if "wrong_destination" in risk_flags:
+        observed["indicates_wrong_destination"] = True
+    # Past-due routing is intentionally not restored from triage. The detail
+    # extraction must source-support explicit current-email past-due language.
+    if "low_text_quality" in risk_flags:
+        observed["has_low_text_quality"] = True
+    if "conflicting_signals" in risk_flags:
+        observed["has_conflicting_signals"] = True
+
+
 def _json_equivalent(left: Any, right: Any) -> bool:
     return json.dumps(left, sort_keys=True, separators=(",", ":"), default=str) == json.dumps(
         right,
         sort_keys=True,
         separators=(",", ":"),
         default=str,
+    )
+
+
+def _with_triage_audit(detail_attempt: ExtractionAttempt, triage_attempt: ExtractionAttempt) -> ExtractionAttempt:
+    return ExtractionAttempt(
+        parsed_payload=detail_attempt.parsed_payload,
+        prompt=detail_attempt.prompt,
+        raw_response=detail_attempt.raw_response,
+        extractor_type=detail_attempt.extractor_type,
+        model=detail_attempt.model,
+        prompt_version=detail_attempt.prompt_version,
+        deployment_name=detail_attempt.deployment_name,
+        api_version=detail_attempt.api_version,
+        request_parameters=detail_attempt.request_parameters,
+        raw_usage=detail_attempt.raw_usage,
+        prompt_tokens=detail_attempt.prompt_tokens,
+        completion_tokens=detail_attempt.completion_tokens,
+        total_tokens=detail_attempt.total_tokens,
+        cached_prompt_tokens=detail_attempt.cached_prompt_tokens,
+        reasoning_tokens=detail_attempt.reasoning_tokens,
+        latency_ms=detail_attempt.latency_ms,
+        attempts=detail_attempt.attempts,
+        triage={
+            "status": "validated",
+            "prompt_version": triage_attempt.prompt_version,
+            "raw_response": triage_attempt.raw_response,
+            "parsed_output": triage_attempt.parsed_payload,
+            "validation_attempts": list(triage_attempt.attempts),
+        },
     )
 
 

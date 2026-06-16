@@ -52,6 +52,8 @@ The code may define supported condition types, but business-specific condition v
 - Database address scoring must parse canonical `asset.address` values into street, city, state, and ZIP components inside the lookup SQL when component columns are not available. ZIP scoring must use the last ZIP-like token from the canonical address, and state scoring must normalize common full state names to 2-letter abbreviations.
 - Deterministic gate checks remain the final authority.
 - LLM final property review evaluates the full candidate set after SQL retrieval. It must consider asset alias/code, asset name, asset type, matched text/address, extracted property name, possible aliases, evidence summary, address candidate evidence text, service/property/site address, and bill-to context before returning its advisory selected asset. Asset type is advisory context only and must not authorize routing.
+- LLM final property review must preserve visible asset-code families. It must not convert visible Westport/`WP` evidence into Alliance Gateway/`GW` evidence, or visible Gateway/`GW` evidence into Westport/`WP` evidence. If the source evidence says `WP9` and a candidate is `GW9` / `Alliance Gateway 9`, the reviewer must return no candidate unless the source also visibly supports `GW9` or `Alliance Gateway 9`.
+- When extracted property code and property name conflict, the LLM final property review should prefer the source-visible exact code family and return no candidate when the conflict prevents a confident candidate selection.
 - For shared-address candidates, the review may select exactly one candidate only when extracted name, code, tenant, alias, or evidence text distinguishes that candidate; address-only ties must remain ambiguous and escalate.
 - LLM extraction and advisory property review must preserve explicit visible asset or property names in audit-facing fields. A visible name must not be normalized into a different canonical asset family solely because a nearby address, code, or bill-to signal resembles another asset.
 - When a visible property name and address disagree, LLM extraction and advisory review should prefer the visible property name for canonical asset normalization unless the source explicitly identifies the address as the service, site, delivery, shipping, or property address for the invoice.
@@ -107,6 +109,16 @@ If invoice is only available by link:
 - Generic payment portal, enrollment, or informational notices are not link-only invoices unless invoice retrieval is link-only and no usable invoice attachment is present.
 - In local processing, deterministic code must set the link-only observed fact when email body text includes both a URL and payment-portal language (for example `log in`, `pay bill`, or `bill is due`) and no invoice attachment is present, even if extractor output misses that signal.
 
+### Contractor Timesheet With No Invoice
+If a validated extraction batch contains a contractor timesheet, time sheet, time-entry detail, hourly detail, shift report, actual hours worked, hours worked, or staffing-hours document item and no item classified as `invoice`:
+- outcome: `ESCALATE`
+- escalate label: `CONTRACTOR-TIMESHEET`
+- destination: configured `ESCALATE_CONTRACTOR_TIMESHEET` destination
+- reason: contractor timesheet or time-detail document has no invoice in the run
+- This rule matches the derived `contractor_timesheet_no_invoice` document flag.
+- Invoice packages with separate timesheet or time-detail backup continue to match `hard_separate_lien_waiver` and route to `ESCALATE_LIEN_WAIVER`.
+- The flag is derived by Python batch normalization and must not be returned by extractors.
+
 ### Contract or Pay Application
 If email is a contract or pay application:
 - outcome: `ESCALATE`
@@ -135,8 +147,8 @@ If the current invoice or document is itself a past-due, overdue, or collection 
 - destination: configured `ESCALATE_PAST_DUE` destination
 - reason: past due invoice notice requires manual escalation
 - Rule match must key off the derived `past_due` document flag so both `past_due_notice` classification and invoices whose current amount due is past due route consistently.
-- The derived `past_due` flag means explicit current-invoice past-due evidence. It must not be derived from an inferred or unlabeled due date, payable-upon-receipt terms, copied invoice dates, prior balances, or a date comparison alone.
-- A positive-amount invoice may derive `past_due` from `invoice.due_date < email.received_at.date()` only when the source evidence explicitly labels that date as a due date, payment due date, or remit-by deadline for the current invoice.
+- The derived `past_due` flag means the current email subject or body explicitly calls the payable invoice past due, overdue, in collection, or equivalent.
+- It must not be derived from an inferred or labeled invoice due date, payable-upon-receipt terms, copied invoice dates, prior balances, attachment-only labels, or any date comparison.
 - Account-level aging summaries with unrelated past-due balances must not derive `past_due` when the current invoice amount or balance due is in the `Current` aging bucket.
 - Valid `statement` and `account_summary` classifications must not derive `past_due` from invoice-like fields, due-date comparisons, account-level aging balances, or an erroneous `observed_facts.current_invoice_is_past_due=true`.
 
@@ -185,12 +197,21 @@ If invoice amount is greater than the configured threshold:
 - reason: invoice amount exceeds configured threshold and normal destination is not Medius Properties with a project number exemption
 - if no usable normal destination exists, continue to the existing explicit `ESCALATE` path such as unmatched building or fallback
 
+### Zero-Dollar Invoice
+If invoice amount is exactly `0`:
+- derive the invoice's normal deterministic destination from configured routing rules
+- if a usable normal automatic destination exists, outcome: `ESCALATE`
+- destination: configured `ESCALATE_0_DOLLAR_INVOICE` destination with `0-DOLLAR-INVOICE` label
+- reason: invoice amount is zero and normal destination would auto-route
+- if no usable normal destination exists, continue to the existing explicit `ESCALATE` path such as unmatched building or fallback
+- this rule evaluates before normal automatic property routing, including multifamily routing
+
 ### Multifamily Asset
 If an invoice matches a configured asset with `asset_type = 'Multifamily'`:
-- outcome: `ESCALATE`
-- destination: configured `ESCALATE_MULTIFAMILY` destination with `MULTIFAMILY` label
-- reason: matched multifamily asset requires manual escalation
-- This rule evaluates before invoice amount threshold escalation so high-dollar multifamily invoices still route to `ESCALATE_MULTIFAMILY`.
+- outcome: `AUTO`
+- destination: configured `MEDIUS_MF` destination
+- reason: matched multifamily asset routes to Medius Multifamily
+- This rule evaluates before invoice amount threshold escalation so high-dollar multifamily invoices route to `MEDIUS_MF` when no earlier hard exception, duplicate, or past-due email rule matches.
 
 ### Duplicate
 If duplicate is suspected:
@@ -248,14 +269,6 @@ If matched property is investor-managed:
 - outcome: `AUTO`
 - destination: configured routing table destination
 
-### ALC
-If bill-to indicates ALC:
-- outcome: `ESCALATE`
-- destination: configured `ESCALATE_ALC` destination
-- reason: ALC invoice requires manual escalation during temporary policy period
-
-Text-only evidence for Alliance Landscape, Alliance Landscaping, or standalone ALC must also route to `ESCALATE_ALC` when matched from existing extracted fields, except landscaping text must not override a deterministic property match with a service, property, building, site, shipping, or delivery address other than `9800 Hillwood Pkwy`. A bill-to `9800 Hillwood Pkwy` signal does not override a different matched service, property, building, site, shipping, or delivery address.
-
 ## Confidence Rule
 
 If extraction confidence is below the configured threshold:
@@ -281,11 +294,6 @@ If no rule applies:
 - Low confidence alone does not force `ESCALATE`.
 - A clean Hillwood-owned property invoice routes to configured Hillwood Medius destination.
 - A clean external PM invoice routes to the configured PM destination.
-- ALC invoices route to configured `ESCALATE_ALC`.
-- Multifamily bill-to, asset-type, and text-only signals do not route to the ALC escalation rule.
-- Landscaping text evidence with service, property, building, site, shipping, or delivery address `9800 Hillwood Pkwy` routes to configured `ESCALATE_ALC`.
-- Landscaping text evidence with a deterministic matched service, property, building, site, shipping, or delivery address other than `9800 Hillwood Pkwy` routes to the matched property's configured destination.
-- Bill-to `9800 Hillwood Pkwy` does not override a different deterministic service, property, building, site, shipping, or delivery address match.
 - Property matching accepts property code, property name, building name, tenant name, bill-to address, service/shipping address, and other normalized property-related signals from email or attached invoice text.
 - Property matching guidance preserves explicit visible asset names, including `Hillwood Commons II`, and does not convert them to a different canonical asset such as `Heritage Commons II` because of conflicting bill-to or address evidence.
 - Database property matching uses the normalized `property_lookup` object produced by extraction directly. It must not re-normalize invoice fields into a separate property lookup query.
@@ -293,21 +301,25 @@ If no rule applies:
 - Extracted property address lookup candidates should include both street-only and complete address strings when both are explicitly visible, with service/property/site/shipping/delivery candidates ordered before billing or bill-to candidates.
 - Database address scoring must rank each structured address candidate by deterministic component score plus candidate priority weight. It must not combine the best street from one candidate with the best city, state, or ZIP from another candidate to create a stronger address match.
 - Property code normalization treats common formatting variants equivalently (for example `HC-2`, `HC 2`, and `HC2`).
-- Multi-invoice PDFs, lien waiver merge cases, link-only invoices, unsupported image/Word/Excel business attachments, contracts, and pay applications route to `ESCALATE`.
+- Multi-invoice PDFs, lien waiver merge cases, link-only invoices, contractor timesheets with no invoice, unsupported image/Word/Excel business attachments, contracts, and pay applications route to `ESCALATE`.
 - Link-only invoice escalation uses the configured `hard_link_only_invoice` rule and `ESCALATE_LINK_ONLY` destination even when no property or business-unit identity is present.
 - Check requests route automatically only when they match configured `MEDIUS_PROPERTIES`; all other check requests route to `ESCALATE_CHECK_REQUEST`.
 - Inline email body images are persisted for audit/dashboard rendering but excluded from extraction attachment inputs and wrong-file-type evaluation.
 - Unsupported attachment types do not override configured filing rules for clear non-payable Ben E Keith, ACH, or auto-draft notices.
-- Multi-invoice PDF, split multi-PDF, merge-required, link-only, wrong-file-type, contract/pay-app, duplicate, vendor-question, wrong-destination, past-due, multifamily, and unmatched-building scenarios map to configured escalate labels.
+- Multi-invoice PDF, split multi-PDF, merge-required, link-only, wrong-file-type, contractor-timesheet-no-invoice, contract/pay-app, duplicate, vendor-question, wrong-destination, past-due, multifamily, and unmatched-building scenarios map to configured escalate labels.
 - Current-invoice past due or overdue notices route to `ESCALATE` with destination `ESCALATE_PAST_DUE`.
 - Invoices that only contain an account aging table with unrelated past-due balances do not route to `ESCALATE_PAST_DUE` when the current invoice amount or balance due is in the `Current` bucket.
 - Wrong-destination recipient replies route to `ESCALATE` with destination `ESCALATE_WRONG_DESTINATION`.
 - Emails with payment-portal links and no invoice attachment deterministically normalize to link-only invoice and route to `ESCALATE`.
 - Configured automated non-AP notifications route to `DISCARD` with destination `NO_ACTION`.
 - Current replies whose latest body is classified by validated LLM extraction as a no-action acknowledgement, courtesy/social reply, or confirmation that the recipient will handle/process the prior item route to `DISCARD` with destination `NO_ACTION` when deterministic thread, sender, and attachment gates pass.
+- For current replies, an internal `@hillwood.com` sender is a positive extraction indicator for social/no-action classification, not a routing decision by itself.
+- Short internal replies such as `Thank you. I just sent it.`, `Received, thank you.`, or `I resent it.` should set `latest_reply_indicates_no_ap_action=true` only when the latest body does not ask a question, report a wrong destination, cite a current attachment as AP evidence, or introduce new invoice, payment, statement, link, vendor-question, or property-routing facts.
+- Quoted statement, invoice, or vendor-question history must not override a latest-body no-action acknowledgement when extracting the current item.
 - Appointment confirmations, reminders, and follow-ups classified by validated LLM extraction as informational appointment notices route to `DISCARD` with destination `NO_ACTION` when configured blocked AP-risk flags are absent.
 - Invoices over the configured amount threshold route automatically only when their normal deterministic destination is `MEDIUS_PROPERTIES` and an explicit project number was extracted from a `PROJECT NO` or `PROJECT NUMBER` signal.
-- Invoices over the configured amount threshold whose normal deterministic destination is not `MEDIUS_PROPERTIES`, or whose normal deterministic destination is `MEDIUS_PROPERTIES` without an explicit project number, route to configured `ESCALATE_OVER_10000`, except ALC invoices route to `ESCALATE_ALC` first and matched multifamily assets route to `ESCALATE_MULTIFAMILY` first.
+- Invoices over the configured amount threshold whose normal deterministic destination is not `MEDIUS_PROPERTIES`, or whose normal deterministic destination is `MEDIUS_PROPERTIES` without an explicit project number, route to configured `ESCALATE_OVER_10000`, except matched multifamily assets route to `MEDIUS_MF` first.
+- Zero-dollar invoices whose normal deterministic destination would auto-route instead route to configured `ESCALATE_0_DOLLAR_INVOICE`.
 - Mixed extracted document-item outcomes or destinations aggregate to `ESCALATE_SPLIT_MULTI_PDF`.
 - Statements route to the configured statement outcome.
 - ACH, auto-draft, and Ben E Keith notices route to configured local folders.

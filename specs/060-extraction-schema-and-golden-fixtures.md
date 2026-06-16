@@ -178,6 +178,49 @@ Local `.msg` LLM extraction must return an additive batch envelope:
 }
 ```
 
+For non-fixture local Azure OpenAI extraction, the first LLM evaluation is a triage pass. It must return a validated triage envelope before detailed extraction:
+
+```json
+{
+  "schema_version": "extraction_triage_batch.v1",
+  "excluded_attachments": [
+    {
+      "file_name": "logo.jpg",
+      "reason_code": "irrelevant_to_ap_workflow",
+      "reason": "Decorative logo with no AP workflow facts.",
+      "source": "filename"
+    }
+  ],
+  "items": [
+    {
+      "item_kind": "attachment",
+      "item_key": "attachment:{sha256}",
+      "display_name": "invoice.pdf",
+      "source_attachments": ["invoice.pdf"],
+      "document_type": "invoice",
+      "requires_detail_extraction": true,
+      "extraction_route": "invoice_detail",
+      "risk_flags": [],
+      "confidence": 0.91,
+      "reason": "Attachment appears to contain a payable invoice."
+    }
+  ]
+}
+```
+
+Triage requirements:
+
+- Triage may classify source-visible document type, item boundaries, AP relevance, extraction route, and source-visible risk flags only.
+- Triage must not return workflow rules, outcomes, destinations, recipients, property candidates, or routing decisions.
+- `items[]` must be non-empty unless all reviewed content is explicitly excluded as non-AP; all AP-relevant items require detailed extraction unless the item is safely represented as a non-payable email-level/no-action detail payload by deterministic code.
+- Allowed `extraction_route` values are `invoice_detail`, `statement_detail`, `exception_detail`, `notice_detail`, `email_only_detail`, and `no_detail`.
+- Allowed `risk_flags` values are `multi_invoice`, `separate_supporting_document`, `link_only`, `contract_or_pay_application`, `vendor_question_or_payment_inquiry`, `wrong_destination`, `past_due`, `unsupported_attachment`, `low_text_quality`, and `conflicting_signals`.
+- The triage `multi_invoice` risk flag is allowed only when one attached PDF visibly contains multiple distinct payable invoices, such as multiple invoice numbers, repeated invoice headers, or multiple complete payable invoice sections. It must not be emitted for a single invoice with line items, subtotal/tax/total rows, credits/payments rows, one balance due, one invoice number, one total, an aging table, email text mentioning an invoice number, or multiple separate invoice attachments.
+- The triage `past_due` risk flag is allowed only when the current email subject or body explicitly calls the payable invoice past due, overdue, in collection, or a true past-due notice. It must not be emitted merely because an invoice contains due-date labels, attachment-only past-due labels, an aging table, or nonzero account-level past-due aging buckets.
+- Invalid triage may be repaired once. If triage remains invalid, processing must fail loudly with an ESCALATEable validation error and no partial routing.
+- Detailed extraction consumes validated triage and must return the existing `extraction_batch.v1` / `extraction.v1` contract before deterministic decision processing.
+- If triage and detailed extraction conflict on an AP-risk classification, deterministic normalization and rules must preserve the safer ESCALATEable fact only when the triage flag is source-supported under the same extraction rules. A triage `past_due` flag must not override detailed extraction into `observed_facts.current_invoice_is_past_due=true` when detailed extraction identifies only account-level aging facts. A triage `multi_invoice` flag must not override detailed extraction that explicitly returns `document.multi_invoice=false` and `observed_facts.indicates_multiple_invoices=false`.
+
 Each `items[].extraction` must independently validate as `extraction.v1`. Single legacy `extraction.v1` fixtures remain valid and are compatibility-wrapped as one email-level item by local processing.
 
 - Return document items only for AP workflow-relevant sources: invoices, statements, payment inquiries, lien releases or waivers, contracts, pay applications, check requests, account summaries, past-due notices, ACH or auto-draft notices, Ben E Keith notices, wrong-destination evidence, or other documents with invoice, payment, property, vendor, amount, account, hard-exception, or routing facts.
@@ -185,14 +228,17 @@ Each `items[].extraction` must independently validate as `extraction.v1`. Single
 - Standalone payment-instruction support PDFs attached alongside at least one separate invoice item may be returned in optional batch-level `excluded_attachments` with `reason_code = "payment_instruction_support"`. Examples include standalone wire instructions, ACH instructions, remittance instructions, and payment portal instructions. This exclusion applies only when the payment-instruction attachment has no invoice number, payable amount, bill-to/property/service address, statement balance, vendor question, dispute, missing-remittance question, unsupported invoice evidence, or hard-exception content. Embedded payment instructions inside an invoice PDF remain normal invoice evidence.
 - Each `excluded_attachments[]` entry must include `file_name`, `reason_code`, and `reason`; `source` is optional. Allowed `reason_code` values are `irrelevant_to_ap_workflow` and `payment_instruction_support`. Allowed `source` values are `document_intelligence`, `pymupdf`, `filename`, and `email_context`.
 - Excluded attachments must not appear in any item's `evidence.source_attachments` or `evidence.source_refs`.
-- Return one email-level item only when the body independently contains routing facts, hard exceptions, vendor/payment inquiry, wrong-destination facts, link-only/no-attachment facts, or another non-attachment document.
+- If an extraction payload both excludes an attachment and cites the same attachment as item business evidence, local processing must treat the exclusion as contradictory bookkeeping, preserve the item evidence, remove the conflicting exclusion for validation, audit the normalization, and continue to deterministic routing.
+- Return one email-level item only when the body independently contains routing facts, hard exceptions, vendor/payment inquiry, wrong-destination facts, link-only/no-attachment facts, or another non-attachment document not already represented by a selected readable attachment.
+- Do not return a separate email-level item for routine cover text or generated invoice summary text that references or repeats a selected readable attachment, such as "attached is invoice #123 for Gateway 15" or a BuildOps-style body that repeats invoice number, due date, total, balance due, bill-to, or payment summary while a readable invoice PDF is attached. The email body remains context and audit evidence for the attachment item.
+- If triage includes an email-only item but detailed extraction determines the email body only duplicates the attached invoice, omit that email item from the final `extraction_batch.v1`.
 - Do not merge invoice facts across attachments.
 - Scope `evidence.source_attachments` and `evidence.source_refs` to the current item. Unrelated attachments, including clearly irrelevant, unsupported, or unreadable non-inline attachments, must be omitted from the valid invoice item's evidence while still being persisted and audit logged.
 - Unsupported or unreadable attachments that are the invoice item's required evidence must remain in that item's `evidence.source_attachments` and produce an explicit ESCALATEable outcome.
 - Unsupported, unreadable, image, spreadsheet, or word-processing attachments that contain AP workflow facts must be returned as items rather than omitted.
 - Payment-instruction documents with vendor questions, disputes, missing-remittance questions, unsupported invoice evidence, statement or account-summary content, lien waivers, work tickets, backup packets, contracts, or pay applications must remain document items and route through deterministic policy. When a standalone payment-instruction document is the only actionable source in the batch, it must not be silently excluded.
 - Use one LLM call returning the batch, not one call per attachment.
-- One invalid item makes the batch invalid; local processing must fail loudly rather than silently routing partial results.
+- One invalid item makes the batch invalid; local processing must fail loudly rather than silently routing partial results, except for the recoverable cited-excluded-attachment normalization defined above.
 - Invalid `excluded_attachments` metadata makes the batch invalid. Excluded attachments are audit metadata only and must not create document items, decisions, property lookups, or routing aggregation inputs.
 
 ## Required Fields
@@ -284,6 +330,9 @@ Normalize extracted property lookup values before database comparison:
 - Clear semantic near-matches may normalize to the configured asset name/code when only one `asset_reference` row fits the visible phrase. This includes missing common portfolio prefixes, suffix variants, number-format variants, and configured alias variants, such as `Gateway 15` -> `Alliance Gateway 15` / `GW15`, `Circle T Golf Course` -> `Circle T Golf` / `CTG`, and `Heritage Commons 2` -> `Heritage Commons II` / `HC2`.
 - Do not normalize vague family names or ambiguous partial names such as `Gateway`, `Circle T`, `Commons`, or `Westport` into property lookup name/code values when multiple configured assets could fit; keep them in `business_signals.possible_property_aliases` or `evidence.summary`.
 - Asset codes are short building aliases such as `GW31`, `GW 31`, `HCX`, `HC-2`, `ACC 14`, or `WP9`; return normalized compact variants in `property_lookup.property_code`, such as `gw31` or `hc2`.
+- Asset-code families must be preserved. `WP9`, `GW9`, `HC2`, `HWC2`, `ACC 14`, and `ACN5` are distinct configured alias families unless the source visibly provides an accepted alias variant.
+- Do not convert visible Westport/`WP` evidence into Alliance Gateway/`GW` evidence, or visible Gateway/`GW` evidence into Westport/`WP` evidence. For example, `Service at: WP9 400 Intermodal Pkwy` must not normalize to `GW9` or `Alliance Gateway 9`; it should normalize to `property_lookup.property_code=["wp9"]` and `property_lookup.property_name=["alliance westport 9"]` when supported by `asset_reference`, or omit the property name if not confidently supported.
+- If a visible code and a proposed canonical property name conflict, preserve the visible code, remove the unsupported canonical property name, lower `confidence.property_identity`, and set `observed_facts.has_conflicting_signals = true`.
 - Asset names are building names such as `Alliance Gateway 31` or `Heritage Commons X`; return normalized names in `property_lookup.property_name` when visible.
 - Preserve explicit visible asset names exactly in audit-facing fields such as `invoice.property_name`, `address_candidates.evidence_text`, and `evidence.summary`. Do not rewrite a visible asset name into a different canonical asset family because a nearby address, bill-to value, customer account, or code resembles another asset.
 - When a visible property name and address disagree, prefer the visible property name for canonical asset normalization unless the source explicitly identifies the address as the service, site, delivery, shipping, or property address for the invoice. If the conflict cannot be resolved confidently, lower `confidence.property_identity` and set `observed_facts.has_conflicting_signals = true`.
@@ -323,6 +372,7 @@ Internal `document.document_flags` may include:
 
 - `multi_invoice_pdf`
 - `separate_lien_waiver`
+- `contractor_timesheet_no_invoice`
 - `link_only_invoice`
 - `missing_invoice_attachment`
 - `contract_or_pay_application`
@@ -346,7 +396,7 @@ Routine invoice-payment collection language must not set `observed_facts.indicat
 
 `observed_facts.indicates_informational_appointment_notice` is reserved for source-visible, non-payable appointment or service-visit communications such as confirmations, reminders, follow-ups, upcoming appointments, scheduled service visits, technician visits, and reschedule notices. It must be false when the current email identifies a current invoice, bill, payment request, statement, vendor question, link-only invoice, or other AP action.
 
-`observed_facts.current_invoice_is_past_due` is reserved for facts showing the current payable invoice is itself explicitly past due, overdue, in collection, or the document is classified as a true `past_due_notice`. A payable current invoice with `invoice.due_date` before `email.received_at.date()` must not set this fact from date comparison alone. It may be true when the source includes explicit past-due, overdue, collection, reminder, `Due Date`, `Payment Due`, `Please remit by`, or equivalent payment-deadline wording for the current invoice and the labeled date is before receipt. `invoice.due_date` may still be populated for extracted invoice fields, including payable-upon-receipt terms when the document presents a payment due date, but extractors must not copy `invoice.invoice_date` into `invoice.due_date` unless the document explicitly presents that date as the payment due date. “Payable upon receipt,” “current invoice due,” prior balances, or copied invoice dates alone must not count as explicit past-due evidence. Statements and account summaries with aging tables, open items, or account-level past-due balances remain statement/account-summary filing candidates and must not be classified as past-due notices unless the document is explicitly a past-due or collection notice. It must be false when the current invoice amount or balance due is in the `Current` aging bucket, even if other account-level aging buckets have nonzero past-due balances.
+`observed_facts.current_invoice_is_past_due` is reserved for facts showing the current email subject or body explicitly calls the payable invoice past due, overdue, in collection, or a true past-due notice. A payable current invoice with `invoice.due_date` before `email.received_at.date()` must not set this fact from date comparison. Attachment-only due-date labels, payment due dates, remit-by dates, aging tables, collection labels, and invoice document titles must not set this fact unless the current email subject/body specifically calls out the invoice as past due or overdue. `invoice.due_date` may still be populated for extracted invoice fields when the document presents a payment due date, but extractors must not copy `invoice.invoice_date` into `invoice.due_date` unless the document explicitly presents that date as the payment due date. “Payable upon receipt,” “current invoice due,” prior balances, or copied invoice dates alone must not count as explicit past-due evidence. Statements and account summaries with aging tables, open items, or account-level past-due balances remain statement/account-summary filing candidates and must not be classified as past-due notices unless the current email subject/body explicitly identifies a past-due or collection notice. It must be false when the current invoice amount or balance due is in the `Current` aging bucket, even if other account-level aging buckets have nonzero past-due balances.
 
 `observed_facts.account_has_past_due_aging_balance` identifies separate account-level aging balances outside the current invoice. `observed_facts.contains_aging_summary` identifies the presence of an aging table or aging footer. These fields are observable extraction facts only and must not independently derive the internal `past_due` workflow flag.
 
@@ -463,7 +513,7 @@ Expected deterministic outcome: `AUTO` when the normal deterministic destination
 - `confidence.overall` is the minimum safe summary confidence for routing.
 - `confidence.property_identity` must reflect confidence in building, address, tenant, or alias identity.
 - `confidence.property_identity` must be lowered when visible property name, property code, or address signals conflict and the extractor cannot confidently resolve the configured asset from visible source evidence.
-- `confidence.business_unit` must reflect confidence in ALC, Multifamily, or Properties bill-to classification. Multifamily classification is extraction evidence only and must not trigger the ALC escalation rule.
+- `confidence.business_unit` must reflect confidence in Multifamily, Properties, or other visible bill-to classification. Business-unit classification is extraction evidence only and must not authorize routing by itself.
 - Confidence values must be compared against the configured threshold and recorded in audit data.
 - Confidence threshold comparison is audit-only and does not by itself force `ESCALATE`.
 - A fixture may use high confidence only when the expected fact is explicitly known from the fixture definition.
@@ -489,6 +539,8 @@ It must:
 - Return separate AP-relevant supporting documents as their own batch items when they contain workflow facts tied to an invoice.
 - Set `observed_facts.mentions_separate_backup_document = true` on an invoice only when a distinct supporting-document item exists in the batch, such as lien waivers, work orders, tickets, time detail, shift reports, actual hours worked, hours worked, staffing hours, timesheets, time sheets, labor/detail backup, labor/material breakdowns, job completion records, or similar support. The support does not need to say "invoice"; infer relation from shared vendor, project/job, customer, location, invoice number, work order number, service date, technician, amount, line items, or work description. Do not treat this as a duplicate-invoice scenario.
 - Do not set `observed_facts.mentions_separate_backup_document = true` for embedded invoice pages, same-invoice line-item or work detail, invoice-contained work descriptions, inline images, logos, decorative images, photo filenames or image references inside the invoice PDF, excluded irrelevant attachments, or not-selected attachments.
+- Derive internal `document.document_flags` value `contractor_timesheet_no_invoice` only when a batch contains a timesheet, time sheet, time-entry detail, hourly detail, shift report, actual hours worked, hours worked, or staffing-hours item and no item classified as `invoice`.
+- Do not derive `contractor_timesheet_no_invoice` for invoice packages with separate timesheet or time-detail backup; those packages use the separate backup signal on the invoice item.
 - Set `observed_facts.indicates_vendor_question_or_payment_inquiry = true` when the sender asks AP to answer, confirm, research, reconcile, or explain invoice, payment, or account facts, including duplicate payments received with invoice numbers listed and "Can you please Confirm?".
 - Do not return `document.document_flags`, `document.requires_merge`, routing outcomes, destinations, workflow decisions, or high-risk labels.
 - Return all visible plausible asset addresses in ranked `property_lookup.address_candidates` and mirror them into flat `property_lookup` arrays in the same order.
@@ -627,8 +679,7 @@ Initial golden scenarios must cover:
 
 - clean Hillwood-owned invoice
 - clean external PM invoice
-- ALC invoice
-- Multifamily invoice following non-ALC routing policy
+- Multifamily invoice following normal routing policy
 - multi-invoice PDF
 - invoice plus lien waiver
 - link-only invoice
@@ -682,7 +733,7 @@ Initial golden scenarios must cover:
 - Asset reference rows come from `vw_asset_lookup` so canonical and custom assets are available as read-only normalization context.
 - Prompt tests prove the Azure extraction prompt sets `mentions_separate_backup_document` only for invoice packages with distinct supporting-document items, distinguishes embedded invoice detail/images from separate backup, and states that explicit merge instructions are not required.
 - Extraction validation tests prove structured `evidence.source_refs` are accepted and legacy filename/page strings in `evidence.source_pages` are normalized without stopping deterministic processing.
-- Extraction validation tests prove Python derives the internal `past_due` flag for a payable invoice only from explicit current-invoice past-due evidence: `observed_facts.current_invoice_is_past_due=true`, `past_due_notice` classification, or an explicitly labeled due/payment date before `email.received_at.date()`. They prove payable-upon-receipt terms, copied invoice dates, unlabeled due dates, and valid `statement` or `account_summary` classifications do not derive the internal `past_due` flag from invoice-like fields, due-date comparisons, account-level aging balances, or an erroneous `observed_facts.current_invoice_is_past_due=true`.
+- Extraction validation tests prove Python derives the internal `past_due` flag for a payable invoice only from explicit current-email subject/body past-due evidence represented as `observed_facts.current_invoice_is_past_due=true` or an email-supported `past_due_notice` classification. They prove payable-upon-receipt terms, copied invoice dates, labeled or unlabeled due dates, and valid `statement` or `account_summary` classifications do not derive the internal `past_due` flag from invoice-like fields, due-date comparisons, account-level aging balances, or an erroneous `observed_facts.current_invoice_is_past_due=true`.
 - Extraction validation tests prove receipt-based terms such as `Payment Due: Due On Receipt` do not populate `invoice.due_date` and do not derive the internal `past_due` flag.
 - Extraction validation tests cover `extraction_batch.v1`, multiple attachment items, email-level exception items, duplicate item keys, and invalid nested item failure.
 - Extraction validation tests cover valid and invalid batch-level `excluded_attachments`, including rejection when an excluded attachment is cited by an item.
@@ -691,6 +742,8 @@ Initial golden scenarios must cover:
 - Regression tests prove a JPEG or other unsupported attachment wrongly returned as a document item still follows existing `hard_wrong_file_type` escalation behavior.
 - Azure OpenAI extraction validation tests prove invalid LLM contracts are retried once, every attempt is audited, and exhausted retries fail validation without partial routing.
 - Azure OpenAI prompt tests prove the initial extraction prompt places a compact `extraction_batch.v1` contract checklist before long business-rule guidance.
+- Azure OpenAI prompt tests prove the triage prompt returns `extraction_triage_batch.v1`, asks only for itemization/classification/risk facts, and forbids routing outcomes, destinations, recipients, and workflow rule matches.
+- Local processor tests prove non-fixture Azure extraction validates triage first, then runs targeted detailed extraction, and existing deterministic outcomes are unchanged for clean invoice, statement, link-only, vendor question, and invoice-plus-supporting-document scenarios.
 - Azure OpenAI prompt tests prove the initial extraction prompt requires every `items[].extraction` to be a complete `extraction.v1` object with required sections present.
 - Azure OpenAI prompt tests prove the initial extraction prompt includes compact required-key and type guidance for string-or-null invoice fields, numeric confidence fields, boolean observed facts, array-based `property_lookup` fields, allowed document types, and allowed address labels.
 - Azure OpenAI repair prompt tests prove exact validation or parse errors are included with a canonical contract checklist and compact `extraction_batch.v1` skeleton/type guidance.
@@ -699,3 +752,4 @@ Initial golden scenarios must cover:
 - LLM interpretation tests prove malformed advisory responses are retried once, while invented candidate IDs remain rejected without retry-based routing authorization.
 - Multi-attachment golden tests prove same-destination items aggregate to one final route, mixed destinations escalate, and separate invoice PDFs do not trigger `multi_invoice_pdf`.
 - Multi-attachment golden tests prove a valid invoice PDF can route when an unrelated unsupported attachment is present but excluded from the invoice item's evidence, while a single unsupported required invoice attachment or mixed supported/unsupported invoice evidence escalates.
+- Golden tests prove standalone contractor timesheets with no invoice route to `ESCALATE_CONTRACTOR_TIMESHEET`, while invoice plus timesheet backup continues to route through separate-backup escalation.

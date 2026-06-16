@@ -83,24 +83,24 @@ def health() -> dict[str, Any]:
 
 
 @app.get("/api/monitor/summary")
-def monitor_summary(days: int = Query(7, ge=1, le=365)) -> dict[str, Any]:
-    return service.monitor_summary(days)
+def monitor_summary(start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
+    return service.monitor_summary(start_date, end_date)
 
 
 @app.get("/api/monitor/throughput")
-def monitor_throughput(days: int = Query(7, ge=1, le=365)) -> list[dict[str, Any]]:
-    return service.monitor_throughput(days)
+def monitor_throughput(start_date: str | None = None, end_date: str | None = None) -> list[dict[str, Any]]:
+    return service.monitor_throughput(start_date, end_date)
 
 
 @app.get("/api/monitor/escalate-reasons")
 @app.get("/api/monitor/ESCALATE-reasons")
-def monitor_escalate_reasons(days: int = Query(7, ge=1, le=365)) -> list[dict[str, Any]]:
-    return service.monitor_escalate_reasons(days)
+def monitor_escalate_reasons(start_date: str | None = None, end_date: str | None = None) -> list[dict[str, Any]]:
+    return service.monitor_escalate_reasons(start_date, end_date)
 
 
 @app.get("/api/monitor/destinations")
-def monitor_destinations(days: int = Query(7, ge=1, le=365)) -> list[dict[str, Any]]:
-    return service.monitor_destinations(days)
+def monitor_destinations(start_date: str | None = None, end_date: str | None = None) -> list[dict[str, Any]]:
+    return service.monitor_destinations(start_date, end_date)
 
 
 @app.get("/api/monitor/escalate-emails")
@@ -110,8 +110,13 @@ def monitor_escalate_emails(limit: int = Query(25, ge=1, le=100)) -> list[dict[s
 
 
 @app.get("/api/monitor/recent-runs")
-def monitor_recent_runs(limit: int = Query(25, ge=1, le=100)) -> list[dict[str, Any]]:
-    return service.monitor_recent_runs(limit)
+def monitor_recent_runs(
+    limit: int = Query(25, ge=1, le=100),
+    start_date: str | None = None,
+    end_date: str | None = None,
+    q: str = "",
+) -> list[dict[str, Any]]:
+    return service.monitor_recent_runs(limit, start_date, end_date, q)
 
 
 @app.get("/api/emails/search")

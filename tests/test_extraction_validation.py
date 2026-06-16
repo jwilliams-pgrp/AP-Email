@@ -2,12 +2,137 @@ from __future__ import annotations
 
 import unittest
 
-from ap_automation.models.extraction import ExtractionValidationError, validate_extraction, validate_extraction_batch
-from ap_automation.services.azure_openai_extractor import _prompt, contract_repair_prompt, lint_extraction_contract
+from ap_automation.models.extraction import ExtractionValidationError, validate_extraction, validate_extraction_batch, validate_extraction_triage_batch
+from ap_automation.services.azure_openai_extractor import _prompt, _triage_prompt, contract_repair_prompt, lint_extraction_contract
 from ap_automation.services.msg_parser import ParsedMsg
 
 
 class ExtractionValidationTests(unittest.TestCase):
+    def test_validates_extraction_triage_batch(self) -> None:
+        batch = validate_extraction_triage_batch(
+            {
+                "schema_version": "extraction_triage_batch.v1",
+                "excluded_attachments": [
+                    {
+                        "file_name": "logo.png",
+                        "reason_code": "irrelevant_to_ap_workflow",
+                        "reason": "Inline logo has no AP workflow facts.",
+                        "source": "filename",
+                    }
+                ],
+                "items": [
+                    {
+                        "item_kind": "attachment",
+                        "item_key": "attachment:invoice",
+                        "display_name": "invoice.pdf",
+                        "source_attachments": ["invoice.pdf"],
+                        "document_type": "invoice",
+                        "requires_detail_extraction": True,
+                        "extraction_route": "invoice_detail",
+                        "risk_flags": [],
+                        "confidence": 0.91,
+                        "reason": "Attachment appears to contain a payable invoice.",
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(batch.schema_version, "extraction_triage_batch.v1")
+        self.assertEqual(batch.items[0].extraction_route, "invoice_detail")
+        self.assertEqual(batch.excluded_attachments[0].file_name, "logo.png")
+
+    def test_extraction_triage_batch_rejects_duplicate_item_keys_and_unknown_route(self) -> None:
+        with self.assertRaises(ExtractionValidationError) as exc:
+            validate_extraction_triage_batch(
+                {
+                    "schema_version": "extraction_triage_batch.v1",
+                    "items": [
+                        {
+                            "item_kind": "attachment",
+                            "item_key": "attachment:invoice",
+                            "display_name": "invoice.pdf",
+                            "source_attachments": ["invoice.pdf"],
+                            "document_type": "invoice",
+                            "requires_detail_extraction": True,
+                            "extraction_route": "invented",
+                            "risk_flags": ["made_up"],
+                            "confidence": 0.91,
+                            "reason": "Invoice.",
+                        },
+                        {
+                            "item_kind": "attachment",
+                            "item_key": "attachment:invoice",
+                            "display_name": "statement.pdf",
+                            "source_attachments": ["statement.pdf"],
+                            "document_type": "statement",
+                            "requires_detail_extraction": True,
+                            "extraction_route": "statement_detail",
+                            "risk_flags": [],
+                            "confidence": 0.9,
+                            "reason": "Statement.",
+                        },
+                    ],
+                }
+            )
+
+        self.assertTrue(any(error.startswith("items[0].extraction_route must be one of") for error in exc.exception.errors))
+        self.assertTrue(any("items[0].risk_flags" in error for error in exc.exception.errors))
+        self.assertIn("items[1].item_key must be unique within the triage batch", exc.exception.errors)
+
+    def test_extraction_triage_batch_rejects_excluded_attachment_citation(self) -> None:
+        with self.assertRaises(ExtractionValidationError) as exc:
+            validate_extraction_triage_batch(
+                {
+                    "schema_version": "extraction_triage_batch.v1",
+                    "excluded_attachments": [
+                        {
+                            "file_name": "invoice.pdf",
+                            "reason_code": "irrelevant_to_ap_workflow",
+                            "reason": "Bad exclusion.",
+                        }
+                    ],
+                    "items": [
+                        {
+                            "item_kind": "attachment",
+                            "item_key": "attachment:invoice",
+                            "display_name": "invoice.pdf",
+                            "source_attachments": ["invoice.pdf"],
+                            "document_type": "invoice",
+                            "requires_detail_extraction": True,
+                            "extraction_route": "invoice_detail",
+                            "risk_flags": [],
+                            "confidence": 0.91,
+                            "reason": "Invoice.",
+                        }
+                    ],
+                }
+            )
+
+        self.assertIn("items[0].source_attachments must not cite excluded attachment invoice.pdf", exc.exception.errors)
+
+    def test_extraction_triage_batch_requires_confidence_and_reason(self) -> None:
+        with self.assertRaises(ExtractionValidationError) as exc:
+            validate_extraction_triage_batch(
+                {
+                    "schema_version": "extraction_triage_batch.v1",
+                    "items": [
+                        {
+                            "item_kind": "email",
+                            "item_key": "email:body",
+                            "display_name": "Email",
+                            "source_attachments": [],
+                            "document_type": "unknown",
+                            "requires_detail_extraction": False,
+                            "extraction_route": "no_detail",
+                            "risk_flags": [],
+                        }
+                    ],
+                }
+            )
+
+        self.assertIn("items[0].confidence expected number, got NoneType", exc.exception.errors)
+        self.assertIn("items[0].reason must be a non-empty string", exc.exception.errors)
+
     def test_validates_required_contract(self) -> None:
         extraction = validate_extraction(_base_payload())
 
@@ -126,6 +251,56 @@ class ExtractionValidationTests(unittest.TestCase):
         self.assertTrue(batch.items[0].extraction.observed_facts.mentions_separate_backup_document)
         self.assertIn("separate_lien_waiver", batch.items[0].extraction.document.document_flags)
         self.assertNotIn("separate_lien_waiver", batch.items[1].extraction.document.document_flags)
+        self.assertNotIn("contractor_timesheet_no_invoice", batch.items[1].extraction.document.document_flags)
+
+    def test_standalone_timesheet_without_invoice_derives_contractor_timesheet_flag(self) -> None:
+        support = _base_payload()
+        support["document"]["document_type"] = "unknown"
+        support["document"]["has_invoice_attachment"] = False
+        support["invoice"]["invoice_number"] = None
+        support["invoice"]["property_code"] = None
+        support["property_lookup"]["property_code"] = None
+        support["evidence"]["source_attachments"] = ["contractor-timesheet.pdf"]
+        support["evidence"]["summary"] = "Contractor timesheet with actual hours worked for property service."
+
+        batch = validate_extraction_batch(
+            {
+                "schema_version": "extraction_batch.v1",
+                "items": [
+                    {
+                        "item_kind": "attachment",
+                        "item_key": "attachment:timesheet",
+                        "display_name": "contractor-timesheet.pdf",
+                        "metadata": {},
+                        "extraction": support,
+                    },
+                ],
+            }
+        )
+
+        self.assertIn("contractor_timesheet_no_invoice", batch.items[0].extraction.document.document_flags)
+        self.assertNotIn("separate_lien_waiver", batch.items[0].extraction.document.document_flags)
+
+    def test_standalone_non_timesheet_support_does_not_derive_contractor_timesheet_flag(self) -> None:
+        support = _base_payload()
+        support["document"]["document_type"] = "unknown"
+        support["document"]["has_invoice_attachment"] = False
+        support["invoice"]["invoice_number"] = None
+        support["invoice"]["property_code"] = None
+        support["property_lookup"]["property_code"] = None
+        support["evidence"]["source_attachments"] = ["notice.pdf"]
+        support["evidence"]["summary"] = "General service notice with no invoice."
+
+        batch = validate_extraction_batch(
+            {
+                "schema_version": "extraction_batch.v1",
+                "items": [
+                    {"item_kind": "attachment", "item_key": "attachment:notice", "display_name": "notice.pdf", "metadata": {}, "extraction": support},
+                ],
+            }
+        )
+
+        self.assertNotIn("contractor_timesheet_no_invoice", batch.items[0].extraction.document.document_flags)
 
     def test_batch_invoice_without_distinct_supporting_item_clears_backup_signal(self) -> None:
         invoice = _base_payload()
@@ -497,7 +672,7 @@ class ExtractionValidationTests(unittest.TestCase):
 
         self.assertNotIn("past_due", extraction.document.document_flags)
 
-    def test_explicit_due_date_before_received_date_derives_past_due(self) -> None:
+    def test_explicit_due_date_before_received_date_does_not_derive_past_due(self) -> None:
         payload = _base_payload()
         payload["email"]["received_at"] = "2026-05-20T09:15:00-05:00"
         payload["invoice"]["due_date"] = "2026-05-10"
@@ -507,7 +682,8 @@ class ExtractionValidationTests(unittest.TestCase):
 
         extraction = validate_extraction(payload)
 
-        self.assertIn("past_due", extraction.document.document_flags)
+        self.assertEqual(extraction.invoice.due_date.isoformat(), "2026-05-10")
+        self.assertNotIn("past_due", extraction.document.document_flags)
 
     def test_past_due_language_derives_past_due_without_due_date(self) -> None:
         payload = _base_payload()
@@ -1028,15 +1204,23 @@ class ExtractionValidationTests(unittest.TestCase):
             "indicates_wrong_destination",
             '"latest_reply_indicates_no_ap_action": false',
             '"indicates_informational_appointment_notice": false',
-            "email.latest_body_text itself indicates a non-actionable acknowledgement",
-            "does not ask a question, report a wrong destination, introduce a new invoice/payment/link action",
+            "email.latest_body_text itself contains actual non-action language",
+            "A forwarded message can reactivate quoted AP content",
+            "Empty latest body, signature-only latest body, contact-card-only latest body, or an internal sender alone is not social/no-action language",
+            "A forward or reply may still be social/no-action only when the latest-body words look like social/no-action language",
+            "If the language or context is fuzzy, lean toward leaving latest_reply_indicates_no_ap_action=false",
+            "empty/signature-only while quoted history contains invoice, payment-link, statement, vendor-question, or other AP workflow facts",
+            "when the latest body asks a question, reports a wrong destination",
+            "Treat an internal @hillwood.com sender as a positive indicator for this extraction fact only when actual no-action language is present",
+            '"Thank you. I just sent it."',
+            "Quoted statement, invoice, or vendor-question history must not override a latest-body no-action acknowledgement",
             "wrong-recipient escalation",
             "Do not copy invoice_date into invoice.due_date unless the document explicitly presents that date as the payment due date",
             "Extract invoice.due_date only when the source text explicitly labels a concrete calendar date as the due date",
             "Do not populate invoice.due_date for due-on-receipt, due upon receipt, payable upon receipt, net due upon receipt",
             "Do not infer invoice.due_date from invoice date, service date, activity date, posting date, email received date",
             "Do not set observed_facts.current_invoice_is_past_due=true merely because an invoice says payable upon receipt",
-            "past due, overdue, due date, payment due, please remit by",
+            "current email subject or body explicitly calls the payable invoice past due",
             "current_invoice_is_past_due=true",
             "document_intelligence summaries are Azure Document Intelligence evidence",
             "Prefer successful document_intelligence text",
@@ -1067,6 +1251,99 @@ class ExtractionValidationTests(unittest.TestCase):
             self.assertIn(field_name, prompt)
 
         self.assertLess(prompt.index("Extraction Batch Contract Checklist"), prompt.index("Thread-aware email body handling"))
+
+    def test_azure_openai_triage_prompt_forbids_routing_decisions(self) -> None:
+        prompt = _triage_prompt(
+            ParsedMsg(
+                subject="Invoice",
+                sender_email="vendor@example.com",
+                sender_name="Vendor",
+                received_at=None,
+                body_text="Please see attached invoice.",
+                body_html=None,
+                transport_headers=None,
+                attachments=(),
+                metadata={},
+            ),
+            [
+                {
+                    "file_name": "invoice.pdf",
+                    "content_type": "application/pdf",
+                    "storage_path": "local/attachments/email-1/invoice.pdf",
+                    "file_size_bytes": 100,
+                    "sha256": "abc",
+                    "text_excerpt": "Invoice 100 amount due 120.50",
+                    "metadata": {},
+                }
+            ],
+        )
+
+        self.assertIn("extraction_triage_batch.v1", prompt)
+        self.assertIn("Do not return workflow rules, outcomes, destinations, destination emails, recipients, property candidates, or final routing decisions.", prompt)
+        self.assertIn("Allowed extraction_route values", prompt)
+        self.assertIn("Allowed risk_flags values", prompt)
+        self.assertIn("Use the multi_invoice risk_flag only when one attached PDF visibly contains multiple distinct payable invoices", prompt)
+        self.assertIn("multiple invoice numbers, repeated invoice headers, or multiple complete payable invoice sections", prompt)
+        self.assertIn("Do not use the multi_invoice risk_flag for a single invoice with line items", prompt)
+        self.assertIn("one invoice number, one total, one balance due, or an aging table", prompt)
+        self.assertIn("multiple separate invoice attachments; separate invoice PDFs are separate items", prompt)
+        self.assertIn("Use the past_due risk_flag only when the current email subject or body explicitly calls the payable invoice past due", prompt)
+        self.assertIn("Do not use the past_due risk_flag merely because an invoice contains an aging table", prompt)
+        self.assertIn("account-level aging balances", prompt)
+        self.assertIn("invoice_detail", prompt)
+        self.assertIn("exception_detail", prompt)
+        self.assertIn("Use email_only_detail only when the current email body independently contains AP workflow facts", prompt)
+        self.assertIn("Do not create an email item for routine cover text", prompt)
+        self.assertIn("generated invoice summary text, including BuildOps-style bodies", prompt)
+        self.assertIn("repeats invoice number, due date, total, balance due, bill-to, or payment summary", prompt)
+        self.assertIn("email.latest_body_text is authoritative", prompt)
+        self.assertIn('"Thank you. I just sent it."', prompt)
+        self.assertIn("signature-only latest body", prompt)
+        self.assertIn("A forwarded message can reactivate quoted AP content", prompt)
+        self.assertIn("If the language or context is fuzzy, lean away from no_detail and preserve AP-risk facts", prompt)
+        self.assertIn("Do not classify a current reply as statement_detail only because quoted history or the subject mentions a statement.", prompt)
+
+    def test_targeted_extraction_prompt_includes_validated_triage_context(self) -> None:
+        prompt = _prompt(
+            ParsedMsg(
+                subject="Invoice",
+                sender_email="vendor@example.com",
+                sender_name="Vendor",
+                received_at=None,
+                body_text="Please see attached invoice.",
+                body_html=None,
+                transport_headers=None,
+                attachments=(),
+                metadata={},
+            ),
+            [],
+            triage_payload={
+                "schema_version": "extraction_triage_batch.v1",
+                "items": [
+                    {
+                        "item_kind": "attachment",
+                        "item_key": "attachment:invoice",
+                        "display_name": "invoice.pdf",
+                        "source_attachments": ["invoice.pdf"],
+                        "document_type": "invoice",
+                        "requires_detail_extraction": True,
+                        "extraction_route": "invoice_detail",
+                        "risk_flags": [],
+                        "confidence": 0.91,
+                        "reason": "Invoice.",
+                    }
+                ],
+            },
+        )
+
+        self.assertIn("Validated triage from the first LLM pass", prompt)
+        self.assertIn("Use this triage only to keep detailed extraction focused", prompt)
+        self.assertIn("Still return a complete extraction_batch.v1 object", prompt)
+        self.assertIn("Generated invoice email summaries, including BuildOps-style bodies", prompt)
+        self.assertIn("omit that email item from the final extraction_batch.v1", prompt)
+        self.assertIn("Bill-to-only facts in the email body must not create a second invoice item", prompt)
+        self.assertIn("Quoted statement, invoice, or vendor-question history must not override a latest-body no-action acknowledgement", prompt)
+        self.assertIn("Empty latest body, signature-only latest body, contact-card-only latest body, or an internal sender alone is not social/no-action language", prompt)
 
     def test_azure_openai_prompt_includes_asset_reference_for_normalization_only(self) -> None:
         prompt = _prompt(
@@ -1105,12 +1382,21 @@ class ExtractionValidationTests(unittest.TestCase):
         self.assertIn("Circle T Golf Course -> Circle T Golf / CTG", prompt)
         self.assertIn("Heritage Commons 2 -> Heritage Commons II / HC2", prompt)
         self.assertIn("vague family names or ambiguous partial names", prompt)
+        self.assertIn("Preserve visible asset-code families exactly", prompt)
+        self.assertIn("Do not convert a visible Westport/WP code into an Alliance Gateway/GW code", prompt)
+        self.assertIn("Service at: WP9 400 Intermodal Pkwy", prompt)
+        self.assertIn('property_lookup.property_code=["wp9"]', prompt)
+        self.assertIn('property_lookup.property_name=["alliance westport 9"]', prompt)
+        self.assertIn("must not return gw9 or alliance gateway 9", prompt)
+        self.assertIn("If a visible code and a proposed canonical property name conflict", prompt)
         self.assertIn('property_lookup.property_name=["alliance gateway 34"]', prompt)
         self.assertIn('property_lookup.property_code=["gw34"]', prompt)
         self.assertIn("If visible source text does not match asset_reference", prompt)
         self.assertIn("If asset_reference contains Hillwood Commons II / HWC2", prompt)
         self.assertIn("Do not convert visible Hillwood Commons II to Heritage Commons II / HC2", prompt)
         self.assertIn("Alliance Gateway shorthand such as AG31, AG 31, or AG-31", prompt)
+        self.assertIn("AG shorthand is an explicit exception for Alliance Gateway only", prompt)
+        self.assertIn("do not treat WP, GW, HC, HWC, ACC, ACN, or other configured alias prefixes as interchangeable", prompt)
         self.assertIn("normalize to the listed asset_reference asset_name and configured asset_alias", prompt)
         self.assertIn("Final source-support check before returning JSON", prompt)
         self.assertIn("Do not limit property evidence capture to Bill To or Ship To blocks", prompt)

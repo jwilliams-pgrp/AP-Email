@@ -15,7 +15,6 @@ values
   ('TIFFANY_BECK', 'Tiffany Beck', 'Tiffany.Beck@hillwood.com', 'TIFFANY_BECK', null, false, true),
   ('MICHELE_FELLERS', 'Michele Fellers', 'Michelle.Fellers@hillwood.com;Aliyah.Reyes@hillwood.com', 'MICHELE_FELLERS', null, false, true),
   ('PATTIE_MCCLEAN', 'Pattie McClean', 'Pattie.McClean@hillwood.com', 'PATTIE_MCCLEAN', null, false, true),
-  ('MEDIUS_ALC', 'Medius ALC Queue', 'Medius.ALC@hillwood.com', 'MEDIUS_ALC', null, false, true),
   ('MEDIUS_MF', 'Medius Multifamily Queue', 'Medius.MF@hillwood.com', 'MEDIUS_MF', null, false, true),
   ('FOLDER_STATEMENTS', 'Escalate Statement', null, 'FOLDER_STATEMENTS', null, false, false),
   ('FOLDER_ACH', 'ACH', null, 'FOLDER_ACH', null, false, false),
@@ -26,15 +25,15 @@ values
   ('ESCALATE_MULTI_PDF_MERGE', 'MULTI-PDF-MERGE', null, 'ESCALATE', 'Multi PDF Merge', false, false),
   ('ESCALATE_LIEN_WAIVER', 'LIEN-WAIVER', null, 'ESCALATE', 'Lien Waiver', false, false),
   ('ESCALATE_LINK_ONLY', 'LINK-ONLY', null, 'ESCALATE', 'Link Only', true, false),
+  ('ESCALATE_0_DOLLAR_INVOICE', '0-DOLLAR-INVOICE', null, 'ESCALATE', '0 Dollar Invoice', false, false),
   ('ESCALATE_WRONG_FILE_TYPE', 'WRONG-FILE-TYPE', null, 'ESCALATE', 'Wrong File Type', false, false),
   ('ESCALATE_CONTRACT_PAY_APP', 'CONTRACT-PAY-APP', null, 'ESCALATE', 'Contract Pay App', false, false),
+  ('ESCALATE_CONTRACTOR_TIMESHEET', 'CONTRACTOR-TIMESHEET', null, 'ESCALATE', 'Contractor Timesheet', false, false),
   ('ESCALATE_VENDOR_QUESTION', 'VENDOR-QUESTION', null, 'ESCALATE', 'Vendor Question', false, false),
   ('ESCALATE_WRONG_DESTINATION', 'WRONG-DESTINATION', null, 'ESCALATE', 'Wrong Destination', false, false),
   ('ESCALATE_PAST_DUE', 'PAST-DUE', null, 'ESCALATE', 'Past Due', true, false),
   ('ESCALATE_DUPLICATE_SUSPECTED', 'DUPLICATE-SUSPECTED', null, 'ESCALATE', 'Duplicate Suspected', false, false),
-  ('ESCALATE_ALC', 'ALC', null, 'ESCALATE', 'ALC', false, false),
   ('ESCALATE_SPLIT_MULTI_PDF', 'SPLIT-MULTI-PDF', null, 'ESCALATE', 'SPLIT-MULTI-PDF', false, false),
-  ('ESCALATE_MULTIFAMILY', 'MULTIFAMILY', null, 'ESCALATE', 'MULTIFAMILY', false, false),
   ('ESCALATE_UNMATCHED_BUILDING', 'UNMATCHED-BUILDING', null, 'ESCALATE', 'Unmatched Building', false, false),
   ('ESCALATE_SPECIAL_ADDRESS', 'SPECIAL-ADDRESS', null, 'ESCALATE', 'Special Address', false, false),
   ('ESCALATE_CHECK_REQUEST', 'CHECK-REQUEST', null, 'ESCALATE', 'Check Request', false, false),
@@ -245,6 +244,7 @@ values
   ('hard_pdf_required_unreadable', 'Required invoice PDF is unreadable', 117, true, 'pre_decision_fact', 'ESCALATE', 'ESCALATE_GENERAL', 'Required invoice PDF could not be deterministically read -> ESCALATE', '2026-05-13', 1),
   ('hard_pdf_text_low_quality', 'Invoice PDF text quality is low', 118, true, 'pre_decision_fact', 'ESCALATE', 'ESCALATE_GENERAL', 'Deterministic PDF text quality is too low for safe routing -> ESCALATE', '2026-05-13', 1),
   ('hard_link_only_invoice', 'Link-only invoice requires escalation', 120, true, 'document_flag', 'ESCALATE', 'ESCALATE_LINK_ONLY', 'Invoice is only available by link -> ESCALATE with LINK-ONLY label', '2026-05-07', 1),
+  ('hard_contractor_timesheet_no_invoice', 'Contractor timesheet without invoice requires escalation', 125, true, 'document_flag', 'ESCALATE', 'ESCALATE_CONTRACTOR_TIMESHEET', 'Contractor timesheet or time-detail document has no invoice in the run -> ESCALATE with CONTRACTOR-TIMESHEET label', '2026-06-04', 1),
   ('hard_contract_or_pay_app', 'Contract or pay application requires escalation', 130, true, 'document_type', 'ESCALATE', 'ESCALATE_CONTRACT_PAY_APP', 'High-risk document type requires human escalation -> ESCALATE with CONTRACT-PAY-APP label', '2026-05-07', 1),
   ('hard_vendor_inquiry', 'Vendor question or payment inquiry requires escalation', 140, true, 'document_flag', 'ESCALATE', 'ESCALATE_VENDOR_QUESTION', 'Vendor inquiry requires research or response -> ESCALATE with VENDOR-QUESTION label', '2026-05-07', 1),
   ('hard_wrong_destination', 'Wrong destination reply requires escalation', 142, true, 'document_flag', 'ESCALATE', 'ESCALATE_WRONG_DESTINATION', 'Recipient reports wrong destination -> ESCALATE with WRONG-DESTINATION label', '2026-05-20', 1),
@@ -256,14 +256,13 @@ values
   ('duplicate_candidate', 'Duplicate candidate requires escalation', 200, true, 'duplicate_check', 'ESCALATE', 'ESCALATE_DUPLICATE_SUSPECTED', 'Duplicate candidate found in audit history -> ESCALATE with DUPLICATE-SUSPECTED label', '2026-05-07', 1),
   ('check_request_medius_property', 'Check request for Medius property routes to Medius', 250, true, 'check_request_property_routing', 'AUTO', null, 'Check request matched configured Medius property destination -> AUTO', '2026-05-27', 1),
   ('hard_check_request', 'Check request requires escalation', 260, true, 'document_type', 'ESCALATE', 'ESCALATE_CHECK_REQUEST', 'Check request requires human escalation -> ESCALATE', '2026-05-12', 1),
-  ('alc_escalation', 'ALC requires escalation', 300, true, 'alc_signal', 'ESCALATE', 'ESCALATE_ALC', 'ALC signal requires manual escalation -> ESCALATE with ALC label', '2026-05-21', 1),
   ('informational_property_notice', 'Informational property notice routes to property destination', 350, true, 'informational_property_notice', 'AUTO', null, 'Informational property notice matched configured property destination -> AUTO', '2026-05-15', 1),
-  ('asset_type_multifamily', 'Multifamily asset requires escalation', 375, true, 'property_asset_type', 'ESCALATE', 'ESCALATE_MULTIFAMILY', 'Matched asset type is Multifamily -> ESCALATE with MULTIFAMILY label', '2026-05-27', 2),
+  ('amount_zero_invoice', 'Zero-dollar invoice requires escalation', 360, true, 'amount_equals_zero', 'ESCALATE', 'ESCALATE_0_DOLLAR_INVOICE', 'Invoice amount is zero and normal destination would auto-route -> ESCALATE with 0-DOLLAR-INVOICE label', '2026-06-15', 1),
+  ('asset_type_multifamily', 'Multifamily asset routes to Medius MF', 375, true, 'property_asset_type', 'AUTO', 'MEDIUS_MF', 'Matched asset type is Multifamily -> AUTO to Medius MF', '2026-06-11', 3),
   ('amount_over_threshold', 'Invoice amount over configured threshold without qualifying project number exemption', 400, true, 'amount_threshold', 'ESCALATE', 'ESCALATE_OVER_10000', 'Invoice amount exceeds configured threshold and normal destination is not Medius Properties with project number -> ESCALATE with OVER-10000 label', '2026-05-27', 2),
   ('statement_file', 'Statement or account summary is filed', 500, true, 'document_type', 'FILE', 'FOLDER_STATEMENTS', 'Statement or account summary -> FILE', '2026-05-07', 1),
   ('ach_notice_file', 'ACH or auto-draft notice is filed', 520, true, 'document_type', 'FILE', 'FOLDER_ACH', 'ACH or auto-draft notice -> FILE', '2026-05-07', 1),
   ('ben_e_keith_notice_file', 'Ben E Keith notice is filed', 113, true, 'document_flag', 'FILE', 'FOLDER_BEN_E_KEITH', 'Ben E Keith notice -> FILE', '2026-05-07', 1),
-  ('bill_to_alc', 'ALC bill-to routes to Medius ALC', 600, false, 'bill_to_business_unit', 'AUTO', 'MEDIUS_ALC', 'Bill-to indicates ALC -> AUTO', '2026-05-07', 1),
   ('bill_to_mf', 'Multifamily bill-to routes to Medius MF', 610, false, 'bill_to_business_unit', 'AUTO', 'MEDIUS_MF', 'Bill-to indicates Multifamily -> AUTO', '2026-05-07', 1),
   ('property_routing_match', 'Property routing table match', 700, true, 'property_routing_match', 'AUTO', null, 'Property matched configured routing destination -> AUTO', '2026-05-07', 1),
   ('hard_unmatched_building', 'Unmatched building requires escalation', 750, true, 'property_unmatched', 'ESCALATE', 'ESCALATE_UNMATCHED_BUILDING', 'Property signal present but building is unmatched in routing table -> ESCALATE with UNMATCHED-BUILDING label', '2026-05-13', 1),
@@ -294,6 +293,7 @@ values
   ('hard_pdf_text_low_quality', 'fact_key', '"pdf_text_low_quality"'::jsonb),
   ('hard_pdf_text_low_quality', 'expected', 'true'::jsonb),
   ('hard_link_only_invoice', 'flag', '"link_only_invoice"'::jsonb),
+  ('hard_contractor_timesheet_no_invoice', 'flag', '"contractor_timesheet_no_invoice"'::jsonb),
   ('hard_contract_or_pay_app', 'document_types', '["contract", "pay_application"]'::jsonb),
   ('hard_vendor_inquiry', 'flag', '"vendor_inquiry"'::jsonb),
   ('hard_wrong_destination', 'flag', '"wrong_destination"'::jsonb),
@@ -312,19 +312,15 @@ values
   ('check_request_medius_property', 'document_types', '["check_request"]'::jsonb),
   ('check_request_medius_property', 'allowed_destination_codes', '["MEDIUS_PROPERTIES"]'::jsonb),
   ('hard_check_request', 'document_types', '["check_request"]'::jsonb),
-  ('alc_escalation', 'business_unit_codes', '["ALC"]'::jsonb),
-  ('alc_escalation', 'text_phrases', '["Alliance Landscape", "Alliance Landscaping"]'::jsonb),
-  ('alc_escalation', 'standalone_terms', '["ALC"]'::jsonb),
-  ('alc_escalation', 'text_signal_exempt_property_addresses', '["9800 Hillwood Pkwy"]'::jsonb),
   ('informational_property_notice', 'document_types', '["unknown"]'::jsonb),
   ('informational_property_notice', 'blocked_flags', '["link_only_invoice", "vendor_inquiry", "past_due", "contract_or_pay_application", "conflicting_signals", "low_text_quality"]'::jsonb),
+  ('amount_zero_invoice', 'document_types', '["invoice"]'::jsonb),
   ('amount_over_threshold', 'runtime_config_key', '"amount_review_threshold"'::jsonb),
   ('amount_over_threshold', 'exempt_destination', '"MEDIUS_PROPERTIES"'::jsonb),
   ('amount_over_threshold', 'exempt_requires_project_number', 'true'::jsonb),
   ('statement_file', 'document_types', '["statement", "account_summary"]'::jsonb),
   ('ach_notice_file', 'document_types', '["ach_notice", "auto_draft_notice"]'::jsonb),
   ('ben_e_keith_notice_file', 'flag', '"ben_e_keith"'::jsonb),
-  ('bill_to_alc', 'business_unit_code', '"ALC"'::jsonb),
   ('bill_to_mf', 'business_unit_code', '"MF"'::jsonb),
   ('asset_type_multifamily', 'asset_type', '"Multifamily"'::jsonb),
   ('asset_type_multifamily', 'document_types', '["invoice"]'::jsonb),
@@ -339,6 +335,48 @@ delete from workflow_rule_conditions
 where rule_code in (
   select rule_code from workflow_rules where condition_type = 'property_status'
 );
+
+delete from workflow_rule_conditions
+where rule_code in ('alc_escalation', 'bill_to_alc');
+
+update workflow_rules
+set enabled = false,
+    effective_end = coalesce(effective_end, current_date),
+    updated_at = now()
+where rule_code in ('alc_escalation', 'bill_to_alc');
+
+delete from workflow_rules wr
+where wr.rule_code in ('alc_escalation', 'bill_to_alc')
+  and not exists (select 1 from decisions d where d.matched_rule_code = wr.rule_code)
+  and not exists (select 1 from workflow_rule_versions wrv where wrv.rule_code = wr.rule_code);
+
+update routing_destinations
+set active = false,
+    updated_at = now()
+where destination_code in ('ESCALATE_ALC', 'MEDIUS_ALC');
+
+delete from routing_destinations rd
+where rd.destination_code in ('ESCALATE_ALC', 'MEDIUS_ALC')
+  and not exists (select 1 from actions a where a.destination_code = rd.destination_code)
+  and not exists (select 1 from decisions d where d.destination_code = rd.destination_code)
+  and not exists (select 1 from workflow_rules wr where wr.destination_code = rd.destination_code)
+  and not exists (select 1 from workflow_rule_versions wrv where wrv.destination_code = rd.destination_code)
+  and not exists (select 1 from ownership o where o.destination = rd.destination_code)
+  and not exists (select 1 from asset_custom ac where ac.destination_code = rd.destination_code);
+
+update routing_destinations
+set active = false,
+    updated_at = now()
+where destination_code = 'ESCALATE_MULTIFAMILY';
+
+delete from routing_destinations rd
+where rd.destination_code = 'ESCALATE_MULTIFAMILY'
+  and not exists (select 1 from actions a where a.destination_code = rd.destination_code)
+  and not exists (select 1 from decisions d where d.destination_code = rd.destination_code)
+  and not exists (select 1 from workflow_rules wr where wr.destination_code = rd.destination_code)
+  and not exists (select 1 from workflow_rule_versions wrv where wrv.destination_code = rd.destination_code)
+  and not exists (select 1 from ownership o where o.destination = rd.destination_code)
+  and not exists (select 1 from asset_custom ac where ac.destination_code = rd.destination_code);
 delete from workflow_rules where condition_type = 'property_status';
 
 insert into no_action_email_patterns (

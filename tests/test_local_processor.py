@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -122,6 +123,63 @@ class LocalProcessorTests(unittest.TestCase):
                 extraction_snapshot["items"][0]["decision"]["routing_match"]["decision_context"]["has_quoted_history"]
             )
 
+    def test_short_hillwood_statement_reply_routes_to_no_action_when_extracted_as_no_action(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_email = root / "local" / "ingest" / "reply.msg"
+            fixture = root / "tests" / "fixtures" / "extractions" / "reply.json"
+            source_email.parent.mkdir(parents=True)
+            fixture.parent.mkdir(parents=True)
+            source_email.write_text("placeholder", encoding="utf-8")
+            payload = _payload(
+                document_type="statement",
+                sender_email="Dan.Landsberg@hillwood.com",
+                vendor_name="Chefs' Produce",
+                property_code=None,
+                bill_to=None,
+                business_unit_code=None,
+                has_invoice_attachment=False,
+                amount=0,
+                source_attachments=[],
+                flags=["latest_reply_no_action", "missing_invoice_attachment", "statement_or_account_summary"],
+                evidence_summary="Latest reply says thank you and confirms the sender just sent the prior item.",
+            )
+            fixture.write_text(json.dumps(payload), encoding="utf-8")
+            latest_body = (
+                "Thank you. I just sent it.\n"
+                "All My Best,\n"
+                "Dan Landsberg\n"
+                "Executive Chef - The Texas Barn at Circle T Ranch\n"
+                "Hillwood, A Perot Company"
+            )
+            parsed_msg = ParsedMsg(
+                subject="RE: Chefs' Produce AR Statement for HW 2421 Barn LTD",
+                sender_email="Dan.Landsberg@hillwood.com",
+                sender_name="Landsberg, Dan",
+                received_at=None,
+                body_text=f"{latest_body}\n\nFrom: PropertiesAP <PropertiesAP@hillwood.com>\nSubject: RE: Chefs' Produce AR Statement",
+                transport_headers=None,
+                attachments=(),
+                metadata={
+                    "thread_context": {
+                        "latest_body_text": latest_body,
+                        "quoted_history_text": "From: PropertiesAP <PropertiesAP@hillwood.com>\nSubject: RE: Chefs' Produce AR Statement",
+                        "has_quoted_history": True,
+                    }
+                },
+            )
+            operational_repository = InMemoryOperationalRepository()
+            processor = LocalProcessor(root, InMemoryPolicyRepository(), operational_repository)
+
+            with patch("ap_automation.services.local_processor._parse_source_email", return_value=parsed_msg):
+                run_id = processor.process_fixture(source_email, fixture)
+
+            decision = operational_repository.decisions["decision-1"]
+            self.assertEqual(operational_repository.runs[run_id]["final_outcome"], "DISCARD")
+            self.assertEqual(decision.outcome, "DISCARD")
+            self.assertEqual(decision.destination_code, "NO_ACTION")
+            self.assertEqual(decision.matched_rule_code, "hard_current_reply_no_action")
+
     def test_batch_items_same_destination_aggregate_to_one_action(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -147,6 +205,127 @@ class LocalProcessorTests(unittest.TestCase):
             final_decision = operational_repository.decisions["decision-3"]
             self.assertEqual(final_decision.destination_code, "MEDIUS_PROPERTIES")
             self.assertEqual(final_decision.routing_match["aggregation"]["mode"], "unanimous")
+
+    def test_cover_email_and_attachment_with_same_property_route_unanimously(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_email = root / "local" / "ingest" / "sample.eml"
+            fixture = root / "tests" / "fixtures" / "extractions" / "batch.json"
+            source_email.parent.mkdir(parents=True)
+            fixture.parent.mkdir(parents=True)
+            source_email.write_text("sample email", encoding="utf-8")
+            attachment = _payload(
+                subject="Attached is your invoice #3803 from Routine Vendor LLC",
+                vendor_name="Routine Vendor Company",
+                property_code="GW9",
+                property_name=None,
+                business_unit_code=None,
+                bill_to="Hillwood Development Company, LLC 9800 Hillwood Parkway Fort Worth TX 76177",
+                bill_to_street_address="9800 Hillwood Parkway",
+                bill_to_city="Fort Worth",
+                bill_to_state="TX",
+                bill_to_zip_code="76177",
+                service_address="5300 Alliance Gateway Freeway Fort Worth, TX 76177",
+                property_lookup={
+                    "property_code": ["gw9"],
+                    "property_name": [],
+                    "tenant": [],
+                    "address": ["5300 alliance gateway freeway", "5300 alliance gateway freeway fort worth tx 76177", "9800 hillwood parkway"],
+                    "suite": [],
+                    "city": ["fort worth"],
+                    "state": ["tx"],
+                    "zipcode": ["76177"],
+                    "address_candidates": [
+                        {
+                            "rank": 1,
+                            "label": "service_location",
+                            "street": "5300 alliance gateway freeway",
+                            "city": "fort worth",
+                            "state": "tx",
+                            "zipcode": "76177",
+                            "normalized_address": "5300 alliance gateway freeway fort worth tx 76177",
+                            "source": "attachment:invoice.pdf:1",
+                            "confidence": 0.98,
+                            "evidence_text": "Gateway 9 5300 Alliance Gateway Freeway Fort Worth, TX 76177",
+                        },
+                        {
+                            "rank": 2,
+                            "label": "bill_to",
+                            "street": "9800 hillwood parkway",
+                            "city": "fort worth",
+                            "state": "tx",
+                            "zipcode": "76177",
+                            "normalized_address": "9800 hillwood parkway fort worth tx 76177",
+                            "source": "attachment:invoice.pdf:1",
+                            "confidence": 0.90,
+                            "evidence_text": "Bill To Hillwood Development Company 9800 Hillwood Parkway",
+                        },
+                    ],
+                },
+                source_attachments=["invoice.pdf"],
+                possible_property_aliases=["gateway 9"],
+            )
+            email = _payload(
+                subject="Attached is your invoice #3803 from Routine Vendor LLC",
+                vendor_name="Routine Vendor Company",
+                property_code="GW9",
+                property_name=None,
+                business_unit_code=None,
+                bill_to=None,
+                amount=0,
+                service_address=None,
+                property_lookup={
+                    "property_code": ["gw9"],
+                    "property_name": [],
+                    "tenant": [],
+                    "address": [],
+                    "suite": [],
+                    "city": [],
+                    "state": [],
+                    "zipcode": [],
+                    "address_candidates": [],
+                },
+                source_attachments=[],
+                possible_property_aliases=["gateway 9"],
+                confidence=0.91,
+            )
+            fixture.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "extraction_batch.v1",
+                        "items": [
+                            {
+                                "item_kind": "attachment",
+                                "item_key": "attachment:invoice",
+                                "display_name": "invoice.pdf",
+                                "metadata": {},
+                                "extraction": attachment,
+                            },
+                            {
+                                "item_kind": "email",
+                                "item_key": "email:cover",
+                                "display_name": "Attached is your invoice #3803 from Routine Vendor LLC",
+                                "metadata": {},
+                                "extraction": email,
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            operational_repository = InMemoryOperationalRepository()
+            processor = LocalProcessor(root, InMemoryPolicyRepository(), operational_repository)
+
+            processor.process_fixture(source_email, fixture)
+
+            final_decision = operational_repository.decisions["decision-3"]
+            self.assertEqual(final_decision.outcome, "AUTO")
+            self.assertEqual(final_decision.destination_code, "TIFFANY_BECK")
+            self.assertEqual(final_decision.matched_rule_code, "property_routing_match")
+            aggregation = final_decision.routing_match["aggregation"]
+            self.assertEqual(aggregation["mode"], "unanimous")
+            self.assertNotIn("aggregation_suppressed", aggregation["item_decisions"][1])
 
     def test_batch_items_mixed_destinations_escalate_once(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -382,6 +561,239 @@ class LocalProcessorTests(unittest.TestCase):
             )
             self.assertGreater(len(llm_extractor.asset_reference_rows), 0)
 
+    def test_triage_past_due_flag_does_not_override_account_aging_detail_extraction(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_email = root / "local" / "ingest" / "gateway-aging.msg"
+            source_email.parent.mkdir(parents=True)
+            source_email.write_bytes(b"not-real-msg")
+            payload = _payload(
+                subject="Attached is your invoice #3735 from Alliance Landscape Co LLC",
+                document_type="invoice",
+                invoice_number="3735",
+                invoice_date="2026-06-01",
+                due_date=None,
+                amount=1213.57,
+                vendor_name="Alliance Landscape Company",
+                property_code="GW34",
+                property_name="Alliance Gateway 34",
+                service_address="3202 Alliance Gateway Freeway Fort Worth, TX 76177",
+                bill_to="Hillwood Development Company, LLC 9800 Hillwood Parkway Suite 300 Fort Worth, TX 76177",
+                source_attachments=["Invoice 3735 - Gateway 34.pdf"],
+                evidence_summary=(
+                    "Invoice 3735 shows balance due $1,213.57 and an account-level aging table. "
+                    "The current invoice is not explicitly past due."
+                ),
+            )
+            payload["observed_facts"]["contains_aging_summary"] = True
+            payload["observed_facts"]["account_has_past_due_aging_balance"] = True
+            payload["observed_facts"]["current_invoice_is_past_due"] = False
+            parsed_msg = ParsedMsg(
+                subject="Attached is your invoice #3735 from Alliance Landscape Co LLC",
+                sender_email="casey.miner@hillwood.com",
+                sender_name="Miner, Casey",
+                received_at=None,
+                body_text="Attached is Invoice #3735 for work completed at Gateway 34.",
+                transport_headers=None,
+                attachments=(ParsedAttachment("Invoice 3735 - Gateway 34.pdf", b"%PDF fake", "application/pdf", {}),),
+                metadata={},
+            )
+            operational_repository = InMemoryOperationalRepository()
+            llm_extractor = PastDueTriageFakeAzureOpenAIExtractor(payload)
+            processor = LocalProcessor(
+                root,
+                AllianceGatewayPolicyRepository(),
+                operational_repository,
+                llm_extractor,
+                document_intelligence_analyzer=FakeDocumentIntelligenceAnalyzer(),
+            )
+
+            with patch("ap_automation.services.local_processor._parse_source_email", return_value=parsed_msg):
+                run_id = processor.process_email(source_email)
+
+            decision = operational_repository.decisions["decision-1"]
+            self.assertEqual(operational_repository.runs[run_id]["final_outcome"], "AUTO")
+            self.assertEqual(decision.matched_rule_code, "property_routing_match")
+            self.assertEqual(decision.destination_code, "MEDIUS_PROPERTIES")
+            extraction = operational_repository.extractions[0]["extraction"]
+            self.assertIsNotNone(extraction)
+            self.assertTrue(extraction.observed_facts.contains_aging_summary)
+            self.assertTrue(extraction.observed_facts.account_has_past_due_aging_balance)
+            self.assertFalse(extraction.observed_facts.current_invoice_is_past_due)
+            self.assertNotIn("past_due", extraction.document.document_flags)
+
+    def test_due_on_receipt_invoice_date_before_received_does_not_route_to_past_due(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_email = root / "local" / "ingest" / "three-branches-floral.msg"
+            source_email.parent.mkdir(parents=True)
+            source_email.write_bytes(b"not-real-msg")
+            payload = _payload(
+                subject="FW: New payment request from THREE BRANCHES FLORAL LLC - invoice 2684",
+                document_type="invoice",
+                invoice_number="2684",
+                invoice_date="2026-06-09",
+                due_date="2026-06-09",
+                amount=21007.27,
+                vendor_name="THREE BRANCHES FLORAL LLC",
+                property_code=None,
+                property_name=None,
+                service_address=None,
+                bill_to="Brianna Broussard",
+                source_attachments=["Invoice_2684_from_THREE_BRANCHES_FLORAL_LLC.pdf"],
+                evidence_summary=(
+                    "Invoice 2684 says Due Date 06/09/2026, Terms Due on receipt, "
+                    "and Balance Due $21,007.27. It does not explicitly say past due or overdue."
+                ),
+            )
+            payload["email"]["received_at"] = "2026-06-10T21:09:21+00:00"
+            payload["observed_facts"]["current_invoice_is_past_due"] = False
+            parsed_msg = ParsedMsg(
+                subject="FW: New payment request from THREE BRANCHES FLORAL LLC - invoice 2684",
+                sender_email="Courtney.Gonzalez@hillwood.com",
+                sender_name="Gonzalez, Courtney",
+                received_at=None,
+                body_text=(
+                    "Your invoice is ready!\nBALANCE DUE$21,007.27\n"
+                    "Please find the invoice for the FIFA event on 6/14."
+                ),
+                transport_headers=None,
+                attachments=(
+                    ParsedAttachment(
+                        "Invoice_2684_from_THREE_BRANCHES_FLORAL_LLC.pdf",
+                        b"%PDF fake",
+                        "application/pdf",
+                        {},
+                    ),
+                ),
+                metadata={},
+            )
+            operational_repository = InMemoryOperationalRepository()
+            processor = LocalProcessor(
+                root,
+                InMemoryPolicyRepository(),
+                operational_repository,
+                FakeAzureOpenAIExtractor(payload),
+                document_intelligence_analyzer=FakeDocumentIntelligenceAnalyzer(),
+            )
+
+            with patch("ap_automation.services.local_processor._parse_source_email", return_value=parsed_msg):
+                run_id = processor.process_email(source_email)
+
+            decision = operational_repository.decisions["decision-1"]
+            self.assertEqual(operational_repository.runs[run_id]["final_outcome"], "ESCALATE")
+            self.assertNotEqual(decision.destination_code, "ESCALATE_PAST_DUE")
+            self.assertNotEqual(decision.matched_rule_code, "hard_past_due_notice")
+            extraction = operational_repository.extractions[0]["extraction"]
+            self.assertIsNotNone(extraction)
+            self.assertFalse(extraction.observed_facts.current_invoice_is_past_due)
+            self.assertNotIn("past_due", extraction.document.document_flags)
+
+    def test_triage_multi_invoice_flag_does_not_override_single_invoice_detail_extraction(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_email = root / "local" / "ingest" / "single-invoice-aging.msg"
+            source_email.parent.mkdir(parents=True)
+            source_email.write_bytes(b"not-real-msg")
+            payload = _payload(
+                subject="Attached is your invoice #3685 from Alliance Landscape Co LLC",
+                document_type="invoice",
+                invoice_number="3685",
+                invoice_date="2026-06-03",
+                due_date=None,
+                amount=210.24,
+                vendor_name="Alliance Landscape Company",
+                property_code="HW1",
+                property_name="Hillwood One",
+                bill_to="Hillwood Development Company, LLC 9800 Hillwood Parkway Suite 300 Fort Worth, TX 76177",
+                source_attachments=["Invoice 3685 - ACN 15.pdf"],
+                evidence_summary=(
+                    "Single invoice 3685 shows one balance due, line items, and an aging table with current balance only."
+                ),
+            )
+            payload["document"]["multi_invoice"] = False
+            payload["observed_facts"]["indicates_multiple_invoices"] = False
+            payload["observed_facts"]["contains_aging_summary"] = True
+            parsed_msg = ParsedMsg(
+                subject="Attached is your invoice #3685 from Alliance Landscape Co LLC",
+                sender_email="casey.miner@hillwood.com",
+                sender_name="Miner, Casey",
+                received_at=None,
+                body_text="Attached is Invoice #3685 for work completed at ACN 15.",
+                transport_headers=None,
+                attachments=(ParsedAttachment("Invoice 3685 - ACN 15.pdf", b"%PDF fake", "application/pdf", {}),),
+                metadata={},
+            )
+            operational_repository = InMemoryOperationalRepository()
+            llm_extractor = MultiInvoiceTriageFakeAzureOpenAIExtractor(payload)
+            processor = LocalProcessor(
+                root,
+                InMemoryPolicyRepository(),
+                operational_repository,
+                llm_extractor,
+                document_intelligence_analyzer=FakeDocumentIntelligenceAnalyzer(),
+            )
+
+            with patch("ap_automation.services.local_processor._parse_source_email", return_value=parsed_msg):
+                run_id = processor.process_email(source_email)
+
+            decision = operational_repository.decisions["decision-1"]
+            self.assertEqual(operational_repository.runs[run_id]["final_outcome"], "AUTO")
+            self.assertEqual(decision.matched_rule_code, "property_routing_match")
+            extraction = operational_repository.extractions[0]["extraction"]
+            self.assertIsNotNone(extraction)
+            self.assertFalse(extraction.document.multi_invoice)
+            self.assertFalse(extraction.observed_facts.indicates_multiple_invoices)
+            self.assertNotIn("multi_invoice_pdf", extraction.document.document_flags)
+
+    def test_triage_multi_invoice_flag_still_escalates_when_detail_extraction_agrees(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_email = root / "local" / "ingest" / "multi-invoice.msg"
+            source_email.parent.mkdir(parents=True)
+            source_email.write_bytes(b"not-real-msg")
+            payload = _payload(
+                subject="Multiple invoices attached",
+                document_type="invoice",
+                invoice_number="3685",
+                amount=210.24,
+                vendor_name="Alliance Landscape Company",
+                property_code="HW1",
+                property_name="Hillwood One",
+                source_attachments=["Invoice packet.pdf"],
+                evidence_summary="One PDF contains multiple distinct invoice sections.",
+                multi_invoice=True,
+            )
+            payload["observed_facts"]["indicates_multiple_invoices"] = True
+            parsed_msg = ParsedMsg(
+                subject="Multiple invoices attached",
+                sender_email="vendor@example.com",
+                sender_name="Vendor",
+                received_at=None,
+                body_text="Please see invoice packet.",
+                transport_headers=None,
+                attachments=(ParsedAttachment("Invoice packet.pdf", b"%PDF fake", "application/pdf", {}),),
+                metadata={},
+            )
+            operational_repository = InMemoryOperationalRepository()
+            processor = LocalProcessor(
+                root,
+                InMemoryPolicyRepository(),
+                operational_repository,
+                FakeAzureOpenAIExtractor(payload),
+                document_intelligence_analyzer=FakeDocumentIntelligenceAnalyzer(),
+            )
+
+            with patch("ap_automation.services.local_processor._parse_source_email", return_value=parsed_msg):
+                run_id = processor.process_email(source_email)
+
+            decision = operational_repository.decisions["decision-1"]
+            self.assertEqual(operational_repository.runs[run_id]["final_outcome"], "ESCALATE")
+            self.assertEqual(decision.matched_rule_code, "hard_multi_invoice_pdf")
+            extraction = operational_repository.extractions[0]["extraction"]
+            self.assertIsNotNone(extraction)
+            self.assertIn("multi_invoice_pdf", extraction.document.document_flags)
+
     def test_azure_extraction_receives_asset_reference_rows_for_canonical_lookup(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -477,6 +889,145 @@ class LocalProcessorTests(unittest.TestCase):
                 validation_step["output_summary"]["not_selected_attachments"][0]["extractor_exclusion"]["reason_code"],
                 "irrelevant_to_ap_workflow",
             )
+
+    def test_cited_excluded_ben_e_keith_excel_attachment_routes_to_ben_e_keith_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_email = root / "local" / "ingest" / "sample.msg"
+            source_email.parent.mkdir(parents=True)
+            source_email.write_bytes(b"not-real-msg")
+            parsed_msg = ParsedMsg(
+                subject="80040277-ACH EzPay Projected Payment",
+                sender_email="FDFWACH@BENEKEITH.COM",
+                sender_name="Ben E Keith",
+                received_at=None,
+                body_text="Projected payment notice from Ben E Keith.",
+                transport_headers=None,
+                attachments=(
+                    ParsedAttachment(
+                        "752944_Projected Payment.xlsx",
+                        b"xlsx bytes",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        {},
+                    ),
+                ),
+                metadata={},
+            )
+            notice = _payload(
+                document_type="ben_e_keith_notice",
+                flags=["ach_or_auto_draft", "ben_e_keith"],
+                source_attachments=["752944_Projected Payment.xlsx"],
+                subject="80040277-ACH EzPay Projected Payment",
+                sender_email="FDFWACH@BENEKEITH.COM",
+            )
+            batch_payload = {
+                "schema_version": "extraction_batch.v1",
+                "excluded_attachments": [
+                    {
+                        "file_name": "752944_Projected Payment.xlsx",
+                        "reason_code": "unsupported_file_type",
+                        "reason": "Spreadsheet attachment was not eligible for PDF extraction.",
+                        "source": "filename",
+                    }
+                ],
+                "items": [
+                    {
+                        "item_kind": "attachment",
+                        "item_key": "attachment:752944",
+                        "display_name": "752944_Projected Payment.xlsx",
+                        "metadata": {},
+                        "extraction": notice,
+                    }
+                ],
+            }
+            llm_extractor = FakeAzureOpenAIExtractor(batch_payload)
+            operational_repository = InMemoryOperationalRepository()
+            processor = LocalProcessor(
+                root,
+                InMemoryPolicyRepository(),
+                operational_repository,
+                llm_extractor,
+                document_intelligence_analyzer=FakeDocumentIntelligenceAnalyzer(),
+            )
+
+            with patch("ap_automation.services.local_processor._parse_source_email", return_value=parsed_msg):
+                run_id = processor.process_email(source_email)
+
+            self.assertEqual(operational_repository.runs[run_id]["status"], "completed")
+            self.assertEqual(operational_repository.runs[run_id]["final_outcome"], "FILE")
+            final_decision = operational_repository.decisions["decision-2"]
+            self.assertEqual(final_decision.destination_code, "FOLDER_BEN_E_KEITH")
+            self.assertEqual(final_decision.matched_rule_code, "ben_e_keith_notice_file")
+            validation_step = next(step for step in operational_repository.steps if step["step_type"] == "VALIDATION")
+            self.assertEqual(validation_step["output_summary"]["validation_status"], "valid_after_normalization")
+            self.assertEqual(
+                validation_step["output_summary"]["normalization"]["excluded_attachment_conflicts"]["restored_attachments"][0]["file_name"],
+                "752944_Projected Payment.xlsx",
+            )
+            self.assertFalse(any(step["step_type"] == "FINALIZE" and step.get("error") for step in operational_repository.steps))
+
+    def test_cited_excluded_generic_excel_attachment_routes_to_wrong_file_type_escalation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_email = root / "local" / "ingest" / "sample.msg"
+            source_email.parent.mkdir(parents=True)
+            source_email.write_bytes(b"not-real-msg")
+            parsed_msg = ParsedMsg(
+                subject="Invoice with spreadsheet",
+                sender_email="vendor@example.com",
+                sender_name="Vendor",
+                received_at=None,
+                body_text="Attached invoice spreadsheet.",
+                transport_headers=None,
+                attachments=(
+                    ParsedAttachment(
+                        "invoice.xlsx",
+                        b"xlsx bytes",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        {},
+                    ),
+                ),
+                metadata={},
+            )
+            invoice = _payload(source_attachments=["invoice.xlsx"])
+            batch_payload = {
+                "schema_version": "extraction_batch.v1",
+                "excluded_attachments": [
+                    {
+                        "file_name": "invoice.xlsx",
+                        "reason_code": "unsupported_file_type",
+                        "reason": "Spreadsheet attachment was not eligible for PDF extraction.",
+                        "source": "filename",
+                    }
+                ],
+                "items": [
+                    {
+                        "item_kind": "attachment",
+                        "item_key": "attachment:invoice",
+                        "display_name": "invoice.xlsx",
+                        "metadata": {},
+                        "extraction": invoice,
+                    }
+                ],
+            }
+            llm_extractor = FakeAzureOpenAIExtractor(batch_payload)
+            operational_repository = InMemoryOperationalRepository()
+            processor = LocalProcessor(
+                root,
+                InMemoryPolicyRepository(),
+                operational_repository,
+                llm_extractor,
+                document_intelligence_analyzer=FakeDocumentIntelligenceAnalyzer(),
+            )
+
+            with patch("ap_automation.services.local_processor._parse_source_email", return_value=parsed_msg):
+                run_id = processor.process_email(source_email)
+
+            self.assertEqual(operational_repository.runs[run_id]["status"], "completed")
+            self.assertEqual(operational_repository.runs[run_id]["final_outcome"], "ESCALATE")
+            final_decision = operational_repository.decisions["decision-2"]
+            self.assertEqual(final_decision.destination_code, "ESCALATE_WRONG_FILE_TYPE")
+            self.assertEqual(final_decision.matched_rule_code, "hard_wrong_file_type")
 
     def test_azure_batch_excludes_payment_instruction_support_from_item_decisions_and_audit(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -622,6 +1173,47 @@ class LocalProcessorTests(unittest.TestCase):
                 decision = operational_repository.decisions["decision-1"]
                 self.assertEqual(decision.matched_rule_code, expected_rule)
 
+    def test_standalone_contractor_timesheet_routes_to_dedicated_escalation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_email = root / "local" / "ingest" / "sample.msg"
+            source_email.parent.mkdir(parents=True)
+            source_email.write_bytes(b"not-real-msg")
+            parsed_msg = ParsedMsg(
+                subject="Contractor timesheet",
+                sender_email="vendor@example.com",
+                sender_name="Vendor",
+                received_at=None,
+                body_text="Attached contractor timesheet with no invoice.",
+                transport_headers=None,
+                attachments=(ParsedAttachment("contractor-timesheet.pdf", b"%PDF-1.4 timesheet", "application/pdf", {}),),
+                metadata={},
+            )
+            item = _payload(document_type="unknown", source_attachments=["contractor-timesheet.pdf"])
+            item["document"]["has_invoice_attachment"] = False
+            item["invoice"]["invoice_number"] = None
+            item["invoice"]["property_code"] = None
+            item["property_lookup"]["property_code"] = None
+            item["evidence"]["summary"] = "Contractor timesheet with actual hours worked and no invoice."
+            batch_payload = _batch(item)
+            llm_extractor = FakeAzureOpenAIExtractor(batch_payload)
+            operational_repository = InMemoryOperationalRepository()
+            processor = LocalProcessor(
+                root,
+                InMemoryPolicyRepository(),
+                operational_repository,
+                llm_extractor,
+                document_intelligence_analyzer=FakeDocumentIntelligenceAnalyzer(),
+            )
+
+            with patch("ap_automation.services.local_processor._parse_source_email", return_value=parsed_msg):
+                run_id = processor.process_email(source_email)
+
+            self.assertEqual(operational_repository.runs[run_id]["final_outcome"], "ESCALATE")
+            decision = operational_repository.decisions["decision-1"]
+            self.assertEqual(decision.matched_rule_code, "hard_contractor_timesheet_no_invoice")
+            self.assertEqual(decision.destination_code, "ESCALATE_CONTRACTOR_TIMESHEET")
+
     def test_azure_batch_wrongly_returned_jpeg_item_still_escalates_wrong_file_type(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -711,6 +1303,44 @@ class LocalProcessorTests(unittest.TestCase):
             self.assertIn("contract_lint", attempts[0])
             self.assertTrue(attempts[1]["changed_payload"])
             self.assertEqual(validation_step["output_summary"]["initial_validation_errors"], attempts[0]["validation_errors"])
+
+    def test_azure_triage_invalid_contract_fails_before_detail_extraction(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_email = root / "local" / "ingest" / "sample.msg"
+            source_email.parent.mkdir(parents=True)
+            source_email.write_bytes(b"not-real-msg")
+            parsed_msg = ParsedMsg(
+                subject="Invoice",
+                sender_email="vendor@example.com",
+                sender_name="Vendor",
+                received_at=None,
+                body_text="Invoice body",
+                transport_headers=None,
+                attachments=(),
+                metadata={},
+            )
+            llm_extractor = BadTriageAzureOpenAIExtractor(_payload())
+            operational_repository = InMemoryOperationalRepository()
+            processor = LocalProcessor(
+                root,
+                InMemoryPolicyRepository(),
+                operational_repository,
+                llm_extractor,
+                document_intelligence_analyzer=FakeDocumentIntelligenceAnalyzer(),
+            )
+
+            with self.assertRaises(ExtractionValidationError):
+                with patch("ap_automation.services.local_processor._parse_source_email", return_value=parsed_msg):
+                    processor.process_email(source_email)
+
+            self.assertEqual(llm_extractor.detail_calls, 0)
+            finalize_errors = [
+                step["error"]
+                for step in operational_repository.steps
+                if step["step_type"] == "FINALIZE" and step.get("error")
+            ]
+            self.assertTrue(any("schema_version must be extraction_triage_batch.v1" in error for error in finalize_errors))
 
     def test_azure_extraction_retry_gets_advisory_lint_for_misspelled_key(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1492,6 +2122,72 @@ class LocalProcessorTests(unittest.TestCase):
             self.assertEqual(decision.matched_rule_code, "hard_link_only_invoice")
             self.assertEqual(len(teams_notifier.notifications), 1)
 
+    def test_forwarded_link_only_invoice_with_signature_only_body_escalates_when_not_social_reply(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_email = root / "local" / "ingest" / "sample.eml"
+            fixture = root / "tests" / "fixtures" / "extractions" / "sample.json"
+            source_email.parent.mkdir(parents=True)
+            fixture.parent.mkdir(parents=True)
+            source_email.write_text("sample email", encoding="utf-8")
+            payload = _payload(
+                document_type="invoice",
+                sender_email="Christine.Long@hillwood.com",
+                vendor_name="Frontier Waste Solutions",
+                has_invoice_attachment=False,
+                link_only=True,
+                amount=0,
+                flags=["link_only_invoice"],
+                evidence_summary="Forwarded invoice link notice in quoted history; latest body is signature-only, not social/no-action language.",
+            )
+            payload["invoice"]["invoice_number"] = "9169178"
+            payload["observed_facts"]["mentions_payment_link_only"] = True
+            payload["observed_facts"]["latest_reply_indicates_no_ap_action"] = False
+            fixture.write_text(json.dumps(payload), encoding="utf-8")
+            operational_repository = InMemoryOperationalRepository()
+            teams_notifier = FakeTeamsNotifier()
+            processor = LocalProcessor(root, InMemoryPolicyRepository(), operational_repository, teams_notifier=teams_notifier)
+
+            latest_body = (
+                "Christine Long, CPM\n"
+                "Senior Property Manager\n"
+                "Hillwood, A Perot Company\n"
+                "9800 Hillwood Parkway, Suite 300, Fort Worth, TX 76177"
+            )
+            parsed_msg = ParsedMsg(
+                subject="Fw: Frontier Waste Solutions Invoice #9169178 Link",
+                sender_email="Christine.Long@hillwood.com",
+                sender_name="Long, Christine",
+                received_at=None,
+                body_text=(
+                    f"{latest_body}\n\n"
+                    "From: jus_custsvc@frontierwaste.com\n"
+                    "Subject: Frontier Waste Solutions Invoice #9169178 Link\n"
+                    "Please click here https://example.com/payinvoice to view your Frontier Waste Solutions invoice."
+                ),
+                transport_headers=None,
+                attachments=(),
+                metadata={
+                    "thread_context": {
+                        "latest_body_text": latest_body,
+                        "quoted_history_text": (
+                            "From: jus_custsvc@frontierwaste.com\n"
+                            "Subject: Frontier Waste Solutions Invoice #9169178 Link\n"
+                            "Please click here https://example.com/payinvoice to view your Frontier Waste Solutions invoice."
+                        ),
+                        "has_quoted_history": True,
+                    }
+                },
+            )
+            with patch("ap_automation.services.local_processor._parse_source_email", return_value=parsed_msg):
+                processor.process_fixture(source_email, fixture)
+
+            decision = operational_repository.decisions["decision-1"]
+            self.assertEqual(decision.outcome, "ESCALATE")
+            self.assertEqual(decision.destination_code, "ESCALATE_LINK_ONLY")
+            self.assertEqual(decision.matched_rule_code, "hard_link_only_invoice")
+            self.assertEqual(len(teams_notifier.notifications), 1)
+
     def test_utility_bill_available_link_override_sets_link_only_fact(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -2205,6 +2901,39 @@ class FakeAzureOpenAIExtractor:
             latency_ms=1234,
         )
 
+    def triage_msg(self, parsed_msg, attachment_records: list[dict[str, Any]]):
+        self.attachment_records = attachment_records
+        from ap_automation.services.azure_openai_extractor import ExtractionAttempt
+
+        payload = _triage_payload(self.payload)
+        return ExtractionAttempt(
+            parsed_payload=payload,
+            prompt="rendered triage prompt",
+            raw_response=json.dumps(payload),
+            extractor_type="azure_openai",
+            model="gpt-test",
+            prompt_version="azure_msg_triage.v1",
+            deployment_name="ap-extractor",
+            api_version="2024-10-21",
+            request_parameters={"temperature": 0, "response_format": {"type": "json_object"}},
+            raw_usage={},
+            prompt_tokens=20,
+            completion_tokens=20,
+            total_tokens=40,
+            cached_prompt_tokens=None,
+            reasoning_tokens=None,
+            latency_ms=100,
+        )
+
+    def extract_msg_with_triage(
+        self,
+        parsed_msg,
+        attachment_records: list[dict[str, Any]],
+        triage_batch,
+        asset_reference_rows: list[dict[str, Any]] | None = None,
+    ):
+        return self.extract_msg(parsed_msg, attachment_records, asset_reference_rows=asset_reference_rows)
+
     def run_json_prompt(self, prompt: str):
         self.json_prompt_calls += 1
         self.prompts.append(prompt)
@@ -2233,6 +2962,30 @@ class FakeAzureOpenAIExtractor:
             ],
         }
         return json.dumps(raw), raw
+
+
+class PastDueTriageFakeAzureOpenAIExtractor(FakeAzureOpenAIExtractor):
+    def triage_msg(self, parsed_msg, attachment_records: list[dict[str, Any]]):
+        attempt = super().triage_msg(parsed_msg, attachment_records)
+        payload = json.loads(json.dumps(attempt.parsed_payload))
+        for item in payload.get("items", []):
+            if isinstance(item, dict):
+                item["risk_flags"] = sorted(set(item.get("risk_flags") or []) | {"past_due"})
+                item["extraction_route"] = "exception_detail"
+                item["reason"] = "Test triage incorrectly flagged account-level aging as past due."
+        return replace(attempt, parsed_payload=payload, raw_response=json.dumps(payload))
+
+
+class MultiInvoiceTriageFakeAzureOpenAIExtractor(FakeAzureOpenAIExtractor):
+    def triage_msg(self, parsed_msg, attachment_records: list[dict[str, Any]]):
+        attempt = super().triage_msg(parsed_msg, attachment_records)
+        payload = json.loads(json.dumps(attempt.parsed_payload))
+        for item in payload.get("items", []):
+            if isinstance(item, dict):
+                item["risk_flags"] = sorted(set(item.get("risk_flags") or []) | {"multi_invoice"})
+                item["extraction_route"] = "exception_detail"
+                item["reason"] = "Test triage incorrectly flagged a single invoice with aging footer as multi-invoice."
+        return replace(attempt, parsed_payload=payload, raw_response=json.dumps(payload))
 
 
 class AssetAwareFakeAzureOpenAIExtractor(FakeAzureOpenAIExtractor):
@@ -2296,6 +3049,101 @@ class RetryingAzureOpenAIExtractor(FakeAzureOpenAIExtractor):
             "prompt_version": "azure_msg_extraction.v1",
         }
         return json.dumps(payload), payload
+
+
+class BadTriageAzureOpenAIExtractor(FakeAzureOpenAIExtractor):
+    def __init__(self, payload: dict[str, Any]) -> None:
+        super().__init__(payload)
+        self.detail_calls = 0
+
+    def triage_msg(self, parsed_msg, attachment_records: list[dict[str, Any]]):
+        from ap_automation.services.azure_openai_extractor import ExtractionAttempt
+
+        payload = {"schema_version": "wrong", "items": []}
+        return ExtractionAttempt(
+            parsed_payload=payload,
+            prompt="bad triage prompt",
+            raw_response=json.dumps(payload),
+            extractor_type="azure_openai",
+            model="gpt-test",
+            prompt_version="azure_msg_triage.v1",
+        )
+
+    def extract_msg_with_triage(
+        self,
+        parsed_msg,
+        attachment_records: list[dict[str, Any]],
+        triage_batch,
+        asset_reference_rows: list[dict[str, Any]] | None = None,
+    ):
+        self.detail_calls += 1
+        return super().extract_msg_with_triage(parsed_msg, attachment_records, triage_batch, asset_reference_rows=asset_reference_rows)
+
+    def run_json_prompt(self, prompt: str):
+        payload = {"schema_version": "still_wrong", "items": []}
+        return json.dumps(payload), payload
+
+
+def _triage_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("schema_version") == "extraction_batch.v1":
+        raw_items = payload.get("items") or []
+        triage_items = [
+            _triage_item_from_extraction(
+                item.get("extraction", {}),
+                item_key=str(item.get("item_key") or f"item:{index}"),
+                item_kind=str(item.get("item_kind") or "attachment"),
+                display_name=item.get("display_name"),
+            )
+            for index, item in enumerate(raw_items)
+            if isinstance(item, dict)
+        ]
+    else:
+        triage_items = [_triage_item_from_extraction(payload, item_key="attachment:invoice", item_kind="attachment", display_name="invoice.pdf")]
+    return {
+        "schema_version": "extraction_triage_batch.v1",
+        "excluded_attachments": [],
+        "items": triage_items,
+    }
+
+
+def _triage_item_from_extraction(
+    extraction: dict[str, Any],
+    *,
+    item_key: str,
+    item_kind: str,
+    display_name: Any,
+) -> dict[str, Any]:
+    document = extraction.get("document") if isinstance(extraction.get("document"), dict) else {}
+    evidence = extraction.get("evidence") if isinstance(extraction.get("evidence"), dict) else {}
+    observed = extraction.get("observed_facts") if isinstance(extraction.get("observed_facts"), dict) else {}
+    document_type = str(document.get("document_type") or "invoice")
+    risk_flags: list[str] = []
+    if document.get("link_only") or observed.get("mentions_payment_link_only"):
+        risk_flags.append("link_only")
+    if document.get("multi_invoice") or observed.get("indicates_multiple_invoices"):
+        risk_flags.append("multi_invoice")
+    if observed.get("indicates_vendor_question_or_payment_inquiry"):
+        risk_flags.append("vendor_question_or_payment_inquiry")
+    if document_type in {"contract", "pay_application"}:
+        risk_flags.append("contract_or_pay_application")
+    route = "invoice_detail"
+    if document_type in {"statement", "account_summary", "ach_notice", "auto_draft_notice", "ben_e_keith_notice"}:
+        route = "statement_detail"
+    if document_type in {"contract", "pay_application", "vendor_question", "payment_inquiry", "past_due_notice", "lien_release", "unknown"} or risk_flags:
+        route = "exception_detail"
+    source_attachments = evidence.get("source_attachments")
+    return {
+        "item_kind": item_kind if item_kind in {"attachment", "email"} else "attachment",
+        "item_key": item_key,
+        "display_name": display_name if isinstance(display_name, str) else "invoice.pdf",
+        "source_attachments": source_attachments if isinstance(source_attachments, list) else [],
+        "document_type": document_type,
+        "requires_detail_extraction": True,
+        "extraction_route": route,
+        "risk_flags": risk_flags,
+        "confidence": 0.9,
+        "reason": "Test triage item derived from fake extraction payload.",
+    }
 
 
 def _batch_prompt_item_keys(prompt: str) -> list[str]:

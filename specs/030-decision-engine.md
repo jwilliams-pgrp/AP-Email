@@ -98,25 +98,25 @@ Postgres data owns:
 
 - Clean internal invoice routes to configured Medius destination.
 - Clean external invoice routes to configured PM destination.
-- ALC invoice routes to configured `ESCALATE_ALC`.
-- Multifamily bill-to, asset-type, and text-only signals do not route to the ALC escalation rule.
-- Landscaping text evidence with a deterministic property match to an address other than `9800 Hillwood Pkwy` routes to the matched property's configured destination.
 - Duplicate invoice routes to `ESCALATE`.
 - Duplicate status `suspected` means another persisted invoice exists for a different `idempotency_key` with the same normalized vendor name, normalized invoice number, and exact invoice date; `confirmed` is not produced by duplicate policy.
 - Duplicate status `suspected` routes to `ESCALATE`.
 - Invoice packages with separate related backup documentation route to configured `ESCALATE_LIEN_WAIVER` through `hard_separate_lien_waiver`.
 - `mentions_lien_waiver_or_release = true` alone does not route to the superseded `ESCALATE_MULTI_PDF_MERGE` path.
 - Past due or overdue invoice notices route to `ESCALATE` using the configured past-due escalation destination.
-- A payable invoice with a positive amount and an explicitly labeled due date or payment due date before `email.received_at.date()` derives the internal `past_due` flag deterministically and routes to `ESCALATE` using the configured past-due escalation destination, even if the extractor did not set `observed_facts.current_invoice_is_past_due`.
+- A payable invoice derives the internal `past_due` flag only when validated extraction identifies explicit current-email subject/body language calling the invoice past due, overdue, in collection, or equivalent. Invoice due dates, attachment-only labels, and date comparisons must not derive `past_due`.
 - Link-only invoice or bill notices, including utility or service bill portal notices with no invoice attachment, route to `ESCALATE`.
+- Contractor timesheet or time-detail document items in a batch with no `invoice` item route to `ESCALATE_CONTRACTOR_TIMESHEET`.
+- Invoice packages with separate timesheet or time-detail backup continue to route through `hard_separate_lien_waiver`.
 - Unsupported or unreadable attachment escalation is scoped to the current item evidence. A disallowed attachment extension or unreadable file must force `ESCALATE` when that file is named in the invoice item's `evidence.source_attachments`; unrelated non-inline attachments on the same email remain persisted and audited but do not block a valid invoice item whose evidence is scoped to a supported readable attachment.
 - If an invoice item names both a supported invoice file and an unsupported backup file in `evidence.source_attachments`, the item must route to `ESCALATE_WRONG_FILE_TYPE` rather than guessing which file is invoice evidence.
 - Ben E Keith flagged items are filed by `ben_e_keith_notice_file` before attachment extension, unreadable required PDF, or low-quality PDF hard exceptions, including `.txt` integration attachments.
 - Messages classified as `payment_inquiry` or `vendor_question`, or with `observed_facts.indicates_vendor_question_or_payment_inquiry = true`, must not be converted to `link_only_invoice` by deterministic link-only overrides.
 - Unknown building routes to `ESCALATE`.
 - Low confidence is recorded and compared to configured threshold for audit, but does not by itself force `ESCALATE`.
+- Zero-dollar invoice routes to configured `ESCALATE_0_DOLLAR_INVOICE` when a usable normal deterministic destination exists; otherwise the existing unmatched-building or fallback escalation path applies.
 - High-dollar invoice routes automatically when its normal deterministic destination is `MEDIUS_PROPERTIES` and an explicit `PROJECT NO` or `PROJECT NUMBER` was extracted as `invoice.project_number`.
-- High-dollar invoice routes to configured `ESCALATE_OVER_10000` when its normal deterministic destination is not `MEDIUS_PROPERTIES`, or when its normal deterministic destination is `MEDIUS_PROPERTIES` but only a job number or no project number was extracted, except ALC invoices route to `ESCALATE_ALC` first and matched multifamily assets route to `ESCALATE_MULTIFAMILY` first.
+- High-dollar invoice routes to configured `ESCALATE_OVER_10000` when its normal deterministic destination is not `MEDIUS_PROPERTIES`, or when its normal deterministic destination is `MEDIUS_PROPERTIES` but only a job number or no project number was extracted, except matched multifamily assets route to `MEDIUS_MF` first.
 - Check request routes automatically when deterministic property matching resolves to configured `MEDIUS_PROPERTIES`.
 - Check request routes to configured `ESCALATE_CHECK_REQUEST` when deterministic property matching is missing, ambiguous, or resolves to a non-Medius destination.
 - Statement routes to configured statement outcome.
@@ -137,4 +137,4 @@ Postgres data owns:
 - Multiple actionable document items that all share the same outcome and destination aggregate to one final email action.
 - If any item decision is `ESCALATE` or `FLAG`, the aggregated final decision uses the matching item decision with the lowest numeric workflow-rule priority.
 - If multiple `AUTO`, `FILE`, or `DISCARD` item decisions disagree on outcome or destination, the aggregated final decision uses the table-driven mixed-item-destination escalation rule with destination `ESCALATE_SPLIT_MULTI_PDF`.
-- Matched invoice assets with `asset_type = 'Multifamily'` route to `ESCALATE_MULTIFAMILY`.
+- Matched invoice assets with `asset_type = 'Multifamily'` route automatically to `MEDIUS_MF`.

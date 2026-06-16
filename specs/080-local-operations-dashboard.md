@@ -58,8 +58,12 @@ The monitor page must show high-level business monitoring metrics:
 - recent audit events or processing runs
 
 The monitor page must support:
-- date range filters, at minimum `7d`, `30d`, and `90d`
-- placing the page switcher centered in the app header and the monitor date range selector in the header action area
+- start date and end date filters that default to the last 14 calendar days ending on the current local date
+- placing the page switcher centered in the app header and the monitor date selectors in the header action area
+- a search input above the recent processing runs list that searches email subject, sender name or email, invoice number, and supported email metadata
+- the recent processing runs search input placed on the same line as the `Recent processing runs` title, centered within the section header when desktop width allows
+- recent processing runs should display compact reason text before `->` when that separator is present, while preserving the full reason for inspection
+- recent processing runs should display started timestamps without seconds or a trailing AM/PM marker, for example `Jun 8, 2026 9:02`
 - outcome filtering
 - clicking metric segments, queue rows, or recent events to drill into matching email records
 - clear distinction between completed, failed, and in-progress audit runs
@@ -154,8 +158,14 @@ If Mermaid rendering fails, the raw Mermaid text must remain available with an e
 - The primary navigation is a toggle group with `Monitor`, `Email Detail`, and `Management`.
 - The monitor page displays business KPIs from local Postgres, not hard-coded demo data.
 - Date range filters update monitor metrics.
+- Monitor recent processing run search filters by email subject, sender name or email, invoice number, and supported email metadata, ordered by audit run start time descending.
+- Recent processing runs display the destination code in the `Outcome` column when present, such as `ESCALATE_VENDOR_QUESTION`, falling back to the final outcome only when no destination code exists.
+- Recent processing runs display compact reason text before `->` when present and started timestamps in compact minute precision.
 - A user can drill from a monitor queue/event/search result to a selected email detail view.
 - The detail page can search by email metadata and extracted invoice fields.
+- The detail page left-side processing run results are ordered by audit run start time descending and selected emails can be navigated with Previous and Next buttons in the displayed order.
+- Email Detail header actions place Previous, Next, and Open on one line, with Previous and Next to the left of Open.
+- Email Detail header decision pill displays the destination code when present, falling back to the final outcome.
 - The detail page displays email metadata, attachments, extraction, decision, actions, ESCALATE status, audit runs, audit steps, and Mermaid trace when present.
 - The detail page can expose the captured Microsoft Office web link for Graph-ingested emails.
 - ESCALATE queue rows and the Email Detail header show an Open action when a captured Microsoft Office web link exists.

@@ -4,6 +4,8 @@ import mermaid from "mermaid";
 import {
   Activity,
   AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
   CheckCircle2,
   ExternalLink,
   FileDown,
@@ -85,7 +87,60 @@ function formatNumber(value) {
 
 function formatDateTime(value) {
   if (!value) return "-";
-  return String(value).replace("T", " ").slice(0, 19);
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value).replace("T", " ").slice(0, 19);
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+  }).format(date);
+}
+
+function formatCompactDateTime(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value).replace("T", " ").slice(0, 16);
+  const month = new Intl.DateTimeFormat(undefined, { month: "short" }).format(date);
+  const day = date.getDate();
+  const year = date.getFullYear();
+  const hour = date.getHours();
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  return `${month} ${day}, ${year} ${hour}:${minute}`;
+}
+
+function compactReason(reason) {
+  if (!reason) return "-";
+  const marker = reason.indexOf("->");
+  if (marker < 0) return reason;
+  return reason.slice(0, marker).trim() || reason;
+}
+
+function toDateInputValue(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function defaultMonitorRange() {
+  const end = new Date();
+  const start = new Date(end);
+  start.setDate(start.getDate() - 14);
+  return {
+    startDate: toDateInputValue(start),
+    endDate: toDateInputValue(end),
+  };
+}
+
+function monitorQuery(range) {
+  const params = new URLSearchParams();
+  if (range.startDate) params.set("start_date", range.startDate);
+  if (range.endDate) params.set("end_date", range.endDate);
+  return params.toString();
 }
 
 function formatOutcomeMetric(data, outcome) {
@@ -126,14 +181,17 @@ function ToggleGroup({ page, setPage }) {
   );
 }
 
-function RangeSelector({ days, setDays }) {
+function DateRangeSelector({ range, setRange }) {
   return (
-    <div className="range" aria-label="Monitor date range">
-      {[7, 30, 90].map((value) => (
-        <button key={value} className={days === value ? "active" : ""} onClick={() => setDays(value)}>
-          {value}d
-        </button>
-      ))}
+    <div className="dateRange" aria-label="Monitor date range">
+      <label>
+        <span>Start date</span>
+        <input type="date" value={range.startDate} onChange={(event) => setRange((current) => ({ ...current, startDate: event.target.value }))} />
+      </label>
+      <label>
+        <span>End date</span>
+        <input type="date" value={range.endDate} onChange={(event) => setRange((current) => ({ ...current, endDate: event.target.value }))} />
+      </label>
     </div>
   );
 }
@@ -151,23 +209,38 @@ function Kpi({ label, value, sub, tone = "blue", icon: Icon = Activity }) {
   );
 }
 
-function Monitor({ days, openEmail }) {
+function Monitor({ range, openEmail }) {
   const [escalateRefresh] = useState(0);
-  const summary = useApi(`/api/monitor/summary?days=${days}`, {}, [days]);
-  const throughput = useApi(`/api/monitor/throughput?days=${days}`, [], [days]);
+  const [runQuery, setRunQuery] = useState("");
+  const [debouncedRunQuery, setDebouncedRunQuery] = useState("");
+  const rangeQuery = useMemo(() => monitorQuery(range), [range]);
+  const recentQuery = useMemo(() => {
+    const params = new URLSearchParams(rangeQuery);
+    params.set("limit", "20");
+    const text = debouncedRunQuery.trim();
+    if (text) params.set("q", text);
+    return params.toString();
+  }, [rangeQuery, debouncedRunQuery]);
+  const summary = useApi(`/api/monitor/summary?${rangeQuery}`, {}, [rangeQuery]);
+  const throughput = useApi(`/api/monitor/throughput?${rangeQuery}`, [], [rangeQuery]);
   const escalateEmails = useApi(`/api/monitor/escalate-emails?limit=25&refresh=${escalateRefresh}`, [], [escalateRefresh]);
-  const recent = useApi("/api/monitor/recent-runs?limit=20", [], [days]);
+  const recent = useApi(`/api/monitor/recent-runs?${recentQuery}`, [], [recentQuery]);
   const data = summary.data;
   const maxDay = Math.max(
     1,
     ...throughput.data.map((row) => THROUGHPUT_CATEGORIES.reduce((sum, [key]) => sum + (row[key] || 0), 0)),
   );
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedRunQuery(runQuery), 250);
+    return () => window.clearTimeout(timer);
+  }, [runQuery]);
+
   return (
     <main className="workspace">
       {summary.error && <Banner tone="bad" text={summary.error} />}
       <div className="kpiGrid">
-        <Kpi label="Processed" value={formatNumber(data.total_processed)} sub={`${days} day window`} icon={Mail} />
+        <Kpi label="Processed" value={formatNumber(data.total_processed)} sub={`${range.startDate} to ${range.endDate}`} icon={Mail} />
         <Kpi label="Automated" value={formatOutcomeMetric(data, "AUTO")} sub="auto routed" tone="green" icon={CheckCircle2} />
         <Kpi label="Escalate" value={formatOutcomeMetric(data, "ESCALATE")} sub={`${formatNumber(data.open_escalate_count)} open escalation items`} tone="amber" icon={AlertTriangle} />
         <Kpi label="Filed" value={formatOutcomeMetric(data, "FILE")} sub="filed locally" tone="blue" icon={History} />
@@ -208,7 +281,13 @@ function Monitor({ days, openEmail }) {
       </div>
 
       <section className="panel recentRuns">
-        <PanelTitle title="Recent processing runs" />
+        <div className="recentRunsHeader">
+          <PanelTitle title="Recent processing runs" />
+          <div className="search monitorSearch">
+            <input value={runQuery} onChange={(event) => setRunQuery(event.target.value)} placeholder="Search subject, sender, invoice number" />
+          </div>
+        </div>
+        {recent.error && <Banner tone="bad" text={recent.error} />}
         <div className="table">
           <div className="thead">
             <span>Status</span><span>Subject</span><span>Outcome</span><span>Reason</span><span>Started</span>
@@ -217,9 +296,9 @@ function Monitor({ days, openEmail }) {
             <button className="tr" key={row.run_id} onClick={() => row.email_id && openEmail(row.email_id)}>
               <span><Badge label={row.status} /></span>
               <span>{row.subject || "No subject"}</span>
-              <span>{row.final_outcome || "-"}</span>
-              <span>{row.reason || "-"}</span>
-              <span>{row.started_at?.replace("T", " ").slice(0, 19)}</span>
+              <span>{row.destination_code || row.final_outcome || "-"}</span>
+              <span title={row.reason || ""}>{compactReason(row.reason)}</span>
+              <span>{formatCompactDateTime(row.started_at)}</span>
             </button>
           ))}
         </div>
@@ -258,12 +337,21 @@ function OpenPortalButton({ href, className = "" }) {
   );
 }
 
-function EmailDetail({ selectedEmailId, setSelectedEmailId }) {
+function EmailDetail({ selectedEmailId, setSelectedEmailId, range }) {
   const [query, setQuery] = useState("");
-  const [searchPath, setSearchPath] = useState("/api/emails/search?limit=25");
+  const rangeQuery = useMemo(() => monitorQuery(range), [range]);
+  const [searchPath, setSearchPath] = useState(`/api/monitor/recent-runs?${rangeQuery}&limit=50`);
   const results = useApi(searchPath, [], [searchPath]);
   const detail = useApi(selectedEmailId ? `/api/emails/${selectedEmailId}` : "/api/emails/search?limit=1", {}, [selectedEmailId]);
   const selected = selectedEmailId ? detail.data : null;
+  const selectedIndex = results.data.findIndex((row) => row.email_id === selectedEmailId);
+  const selectedInResults = selectedIndex >= 0;
+  const previousEmail = selectedIndex > 0 ? results.data[selectedIndex - 1] : null;
+  const nextEmail = selectedIndex >= 0 && selectedIndex < results.data.length - 1 ? results.data[selectedIndex + 1] : null;
+  const navigationNotice =
+    selectedEmailId && results.data.length > 0 && !selectedInResults
+      ? "Previous and Next follow the Email Detail search results. This selected email is not in the current result list."
+      : "";
   const firstRun = useMemo(() => {
     const runs = selected?.audit_runs || [];
     const finalized = runs.find((run) => run.status === "completed" || run.status === "failed");
@@ -274,24 +362,32 @@ function EmailDetail({ selectedEmailId, setSelectedEmailId }) {
   useEffect(() => {
     const timer = window.setTimeout(() => {
       const text = query.trim();
-      setSearchPath(text ? `/api/emails/search?q=${encodeURIComponent(text)}&limit=50` : "/api/emails/search?limit=25");
+      const params = new URLSearchParams(rangeQuery);
+      params.set("limit", "50");
+      if (text) params.set("q", text);
+      setSearchPath(`/api/monitor/recent-runs?${params.toString()}`);
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [query]);
+  }, [query, rangeQuery]);
 
   return (
     <main className="workspace detailGrid">
       <section className="panel searchPanel">
         <PanelTitle title="Search email" icon={Search} />
         <div className="search">
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Subject, sender, vendor, invoice, property, reason" />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search subject, sender, invoice number" />
         </div>
+        {results.error && <Banner tone="bad" text={results.error} />}
         <div className="resultList">
           {results.data.map((row) => (
-            <button key={row.email_id} className={selectedEmailId === row.email_id ? "selected" : ""} onClick={() => setSelectedEmailId(row.email_id)}>
+            <button key={row.run_id || row.email_id} className={selectedEmailId === row.email_id ? "selected" : ""} onClick={() => setSelectedEmailId(row.email_id)}>
+              <div className="resultMeta">
+                <Badge label={row.status || "unknown"} />
+                <small>{formatDateTime(row.started_at)}</small>
+              </div>
               <strong>{row.subject || "No subject"}</strong>
-              <span>{row.sender_email || "Unknown sender"}</span>
-              <small>{formatDateTime(row.received_at)} - {row.vendor_name || row.reason || row.email_id}</small>
+              <span>{row.destination_code || row.final_outcome || "-"}</span>
+              <small>{row.reason || row.sender_email || row.email_id}</small>
             </button>
           ))}
         </div>
@@ -303,15 +399,38 @@ function EmailDetail({ selectedEmailId, setSelectedEmailId }) {
         {selected && selected.email && (
           <>
             <section className="panel emailHeader">
-              <PanelTitle title="Email" icon={Mail} />
-              {selected.email.office_web_link && <OpenPortalButton href={selected.email.office_web_link} className="emailHeaderOpen" />}
+              <div className="emailHeaderTop">
+                <PanelTitle title="Email" icon={Mail} />
+                <div className="emailActions">
+                  <button
+                    type="button"
+                    disabled={!previousEmail}
+                    title={!selectedInResults ? "Select this email from the search results to navigate within that list." : "Open the previous email in the search results."}
+                    onClick={() => previousEmail && setSelectedEmailId(previousEmail.email_id)}
+                  >
+                    <ChevronLeft size={16} />
+                    <span>Previous</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!nextEmail}
+                    title={!selectedInResults ? "Select this email from the search results to navigate within that list." : "Open the next email in the search results."}
+                    onClick={() => nextEmail && setSelectedEmailId(nextEmail.email_id)}
+                  >
+                    <span>Next</span>
+                    <ChevronRight size={16} />
+                  </button>
+                  {selected.email.office_web_link && <OpenPortalButton href={selected.email.office_web_link} className="emailHeaderOpen" />}
+                </div>
+              </div>
+              {navigationNotice && <Banner text={navigationNotice} />}
               <div className="emailSummary">
                 <div className="emailSummaryMain">
                   <strong>{selected.email.subject || "No subject"}</strong>
                   <span>From {displaySender(selected.email)}</span>
                 </div>
                 <div className="emailSummaryDecision">
-                  {latestDecision ? <Badge label={latestDecision.outcome} /> : <Badge label="No decision" />}
+                  {latestDecision ? <Badge label={latestDecision.destination_code || latestDecision.outcome} /> : <Badge label="No decision" />}
                   <span>{latestDecision?.reason || "No decision reason recorded."}</span>
                 </div>
               </div>
@@ -919,7 +1038,7 @@ function Banner({ text, tone = "blue" }) {
 
 function App() {
   const [page, setPage] = useState("monitor");
-  const [monitorDays, setMonitorDays] = useState(7);
+  const [monitorRange, setMonitorRange] = useState(defaultMonitorRange);
   const [selectedEmailId, setSelectedEmailId] = useState("");
   const openEmail = (emailId) => {
     setSelectedEmailId(emailId);
@@ -938,11 +1057,11 @@ function App() {
         </div>
         <ToggleGroup page={page} setPage={setPage} />
         <div className="headerActions">
-          {page === "monitor" && <RangeSelector days={monitorDays} setDays={setMonitorDays} />}
+          {page === "monitor" && <DateRangeSelector range={monitorRange} setRange={setMonitorRange} />}
         </div>
       </header>
-      {page === "monitor" && <Monitor days={monitorDays} openEmail={openEmail} />}
-      {page === "detail" && <EmailDetail selectedEmailId={selectedEmailId} setSelectedEmailId={setSelectedEmailId} />}
+      {page === "monitor" && <Monitor range={monitorRange} openEmail={openEmail} />}
+      {page === "detail" && <EmailDetail selectedEmailId={selectedEmailId} setSelectedEmailId={setSelectedEmailId} range={monitorRange} />}
       {page === "management" && <Management />}
     </div>
   );

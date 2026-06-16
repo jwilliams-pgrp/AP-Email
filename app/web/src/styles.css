@@ -42,20 +42,46 @@ button { cursor: pointer; }
   display: grid; grid-template-columns: repeat(3, minmax(128px, 1fr)); gap: 4px;
   padding: 4px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,.04);
 }
-.toggleGroup button, .range button, .search button, .editForm button {
+.toggleGroup button, .search button, .editForm button, .emailActions button {
   border: 0; color: #dcecff; background: transparent; border-radius: 8px;
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   min-height: 36px; padding: 0 14px;
 }
-.toggleGroup button.active, .range button.active, .search button, .editForm button {
+.toggleGroup button.active, .search button, .editForm button {
   background: rgba(27,117,187,.95);
   box-shadow: 0 10px 28px rgba(27,117,187,.22);
+}
+.emailActions button {
+  border: 1px solid rgba(84,181,255,.32);
+  background: rgba(84,181,255,.14);
+  width: 112px;
+  flex: 0 0 112px;
+}
+.emailActions button:disabled {
+  cursor: not-allowed;
+  opacity: .42;
 }
 
 .workspace { padding: 16px 28px 28px; max-width: 1720px; margin: 0 auto; }
 h1 { margin: 0; font-size: 26px; letter-spacing: 0; }
 p { margin: 6px 0 0; }
-.range { display: flex; gap: 6px; border: 1px solid var(--line); padding: 4px; border-radius: 10px; }
+.dateRange {
+  display: flex;
+  gap: 8px;
+  align-items: end;
+  border: 1px solid var(--line);
+  padding: 6px;
+  border-radius: 10px;
+  background: rgba(255,255,255,.04);
+}
+.dateRange label {
+  display: grid;
+  gap: 4px;
+  min-width: 150px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.dateRange input { min-height: 34px; padding: 6px 8px; }
 
 .kpiGrid { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 10px; }
 .kpi, .panel {
@@ -73,6 +99,9 @@ p { margin: 6px 0 0; }
 .split, .managementGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
 .managementGrid { grid-template-columns: 1.45fr .9fr; }
 .recentRuns { margin-top: 12px; }
+.recentRunsHeader { display: grid; grid-template-columns: 1fr minmax(320px, 560px) 1fr; align-items: center; gap: 18px; margin-bottom: 12px; }
+.recentRunsHeader .panelTitle { margin: 0; white-space: nowrap; }
+.monitorSearch { width: 100%; }
 .panel { padding: 16px; min-width: 0; }
 .panel.wide { min-height: 320px; }
 .panelTitle { margin: 0 0 14px; display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; color: #c9dcf1; }
@@ -151,7 +180,7 @@ p { margin: 6px 0 0; }
 }
 
 .table { display: grid; gap: 4px; }
-.thead, .tr { display: grid; grid-template-columns: 120px 1.2fr 100px 1.4fr 150px; gap: 10px; align-items: center; }
+.thead, .tr { display: grid; grid-template-columns: 120px minmax(0, .9fr) 190px minmax(0, 1.15fr) 155px; gap: 10px; align-items: center; }
 .thead { color: var(--muted); font-size: 12px; padding: 0 10px 6px; }
 .tr {
   width: 100%; text-align: left; color: inherit; border: 1px solid transparent; background: rgba(255,255,255,.03);
@@ -159,6 +188,7 @@ p { margin: 6px 0 0; }
 }
 .tr:hover, .resultList button:hover, .ruleRow:hover { border-color: rgba(84,181,255,.5); background: rgba(27,117,187,.12); }
 .tr span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tr span:nth-child(3) { font-size: 13px; }
 
 .badge { display: inline-flex; align-items: center; width: fit-content; min-height: 24px; padding: 0 8px; border-radius: 999px; font-size: 11px; color: #dff1ff; background: rgba(84,181,255,.17); border: 1px solid rgba(84,181,255,.24); text-transform: uppercase; }
 .badge.failed, .badge.flag { background: rgba(255,90,90,.16); border-color: rgba(255,90,90,.28); }
@@ -180,12 +210,15 @@ textarea { min-height: 96px; resize: vertical; }
   border-radius: 8px; padding: 12px; display: grid; gap: 4px;
 }
 .resultList button { min-width: 0; }
+.resultMeta { display: flex; justify-content: space-between; gap: 8px; align-items: center; min-width: 0; }
 .resultList strong, .resultList span, .resultList small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .resultList button.selected { border-color: var(--blue2); background: rgba(27,117,187,.18); }
 .detailMain { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 12px; min-height: 0; }
 .facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
-.emailHeader { min-height: 0; position: relative; }
-.emailHeaderOpen { position: absolute; top: 14px; right: 16px; }
+.emailHeader { min-height: 0; }
+.emailHeaderTop { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }
+.emailHeaderTop .panelTitle { margin: 0; }
+.emailActions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; min-width: 0; }
 .emailSummary { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(280px, .75fr); gap: 18px; align-items: start; }
 .emailSummaryMain, .emailSummaryDecision { min-width: 0; display: grid; gap: 8px; }
 .emailSummaryMain strong { font-size: 22px; line-height: 1.2; overflow-wrap: anywhere; }
@@ -313,12 +346,16 @@ textarea { min-height: 96px; resize: vertical; }
   .searchPanel { position: static; height: auto; }
   .appHeader { align-items: stretch; grid-template-columns: 1fr; }
   .headerActions { justify-content: stretch; }
-  .range { justify-content: center; }
+  .dateRange { flex-direction: column; align-items: stretch; }
   .toggleGroup { grid-template-columns: 1fr; }
   .facts { grid-template-columns: 1fr; }
+  .recentRunsHeader { display: flex; flex-direction: column; align-items: stretch; }
+  .emailHeaderTop { flex-direction: column; align-items: stretch; }
+  .monitorSearch { width: 100%; }
   .emailSummary, .emailContentGrid { grid-template-columns: 1fr; }
   .emailSummaryDecision { border-left: 0; padding-left: 0; }
-  .emailHeaderOpen { position: static; margin-bottom: 12px; }
+  .emailActions { justify-content: stretch; }
+  .emailActions button, .emailActions .portalOpenButton { flex: 1; width: auto; }
   .emailFrame { min-height: 420px; }
   .propertyFormGrid { grid-template-columns: 1fr; }
   .propertyTableHeader, .processToggleHeader { flex-direction: column; align-items: stretch; }

@@ -119,21 +119,21 @@ def dashboard_health(req: func.HttpRequest) -> func.HttpResponse:
 def dashboard_monitor_summary(req: func.HttpRequest) -> func.HttpResponse:
     from app.api import dashboard_service as service
 
-    return _dashboard_json(req, lambda: service.monitor_summary(_int_query(req, "days", 7, 1, 365)))
+    return _dashboard_json(req, lambda: service.monitor_summary(req.params.get("start_date"), req.params.get("end_date")))
 
 
 @app.route(route="monitor/throughput", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def dashboard_monitor_throughput(req: func.HttpRequest) -> func.HttpResponse:
     from app.api import dashboard_service as service
 
-    return _dashboard_json(req, lambda: service.monitor_throughput(_int_query(req, "days", 7, 1, 365)))
+    return _dashboard_json(req, lambda: service.monitor_throughput(req.params.get("start_date"), req.params.get("end_date")))
 
 
 @app.route(route="monitor/escalate-reasons", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def dashboard_monitor_escalate_reasons(req: func.HttpRequest) -> func.HttpResponse:
     from app.api import dashboard_service as service
 
-    return _dashboard_json(req, lambda: service.monitor_escalate_reasons(_int_query(req, "days", 7, 1, 365)))
+    return _dashboard_json(req, lambda: service.monitor_escalate_reasons(req.params.get("start_date"), req.params.get("end_date")))
 
 
 @app.route(route="monitor/ESCALATE-reasons", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
@@ -145,7 +145,7 @@ def dashboard_monitor_ESCALATE_reasons(req: func.HttpRequest) -> func.HttpRespon
 def dashboard_monitor_destinations(req: func.HttpRequest) -> func.HttpResponse:
     from app.api import dashboard_service as service
 
-    return _dashboard_json(req, lambda: service.monitor_destinations(_int_query(req, "days", 7, 1, 365)))
+    return _dashboard_json(req, lambda: service.monitor_destinations(req.params.get("start_date"), req.params.get("end_date")))
 
 
 @app.route(route="monitor/escalate-emails", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
@@ -164,7 +164,15 @@ def dashboard_monitor_ESCALATE_emails(req: func.HttpRequest) -> func.HttpRespons
 def dashboard_monitor_recent_runs(req: func.HttpRequest) -> func.HttpResponse:
     from app.api import dashboard_service as service
 
-    return _dashboard_json(req, lambda: service.monitor_recent_runs(_int_query(req, "limit", 25, 1, 100)))
+    return _dashboard_json(
+        req,
+        lambda: service.monitor_recent_runs(
+            _int_query(req, "limit", 25, 1, 100),
+            req.params.get("start_date"),
+            req.params.get("end_date"),
+            req.params.get("q") or "",
+        ),
+    )
 
 
 @app.route(route="emails/search", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)

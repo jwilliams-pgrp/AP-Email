@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from ap_automation.models.extraction import DOCUMENT_TYPES
+from ap_automation.models.extraction import ExtractionTriageBatch
 from ap_automation.services.msg_parser import ParsedMsg
 from ap_automation.services.thread_context import latest_body_text
 
@@ -45,6 +46,7 @@ class ExtractionAttempt:
     reasoning_tokens: int | None = None
     latency_ms: int | None = None
     attempts: tuple[dict[str, Any], ...] = ()
+    triage: dict[str, Any] | None = None
 
     def audit_payload(self) -> dict[str, Any]:
         return {
@@ -67,6 +69,7 @@ class ExtractionAttempt:
                 "latency_ms": self.latency_ms,
             },
             "attempts": list(self.attempts),
+            "triage": self.triage,
         }
 
 
@@ -155,6 +158,124 @@ class AzureOpenAIExtractor:
             extractor_type=str(extractor.get("type") or "azure_openai"),
             model=extractor.get("model") if isinstance(extractor.get("model"), str) else self._deployment(),
             prompt_version=extractor.get("prompt_version") if isinstance(extractor.get("prompt_version"), str) else "azure_msg_extraction.v1",
+            deployment_name=result.deployment_name,
+            api_version=result.api_version,
+            request_parameters=result.request_parameters,
+            raw_usage=result.raw_usage,
+            prompt_tokens=result.prompt_tokens,
+            completion_tokens=result.completion_tokens,
+            total_tokens=result.total_tokens,
+            cached_prompt_tokens=result.cached_prompt_tokens,
+            reasoning_tokens=result.reasoning_tokens,
+            latency_ms=result.latency_ms,
+            attempts=attempts,
+        )
+
+    def triage_msg(
+        self,
+        parsed_msg: ParsedMsg,
+        attachment_records: list[dict[str, Any]],
+    ) -> ExtractionAttempt:
+        prompt = _triage_prompt(parsed_msg, attachment_records)
+        try:
+            result = self.run_json_prompt(prompt)
+            attempts: tuple[dict[str, Any], ...] = ()
+        except AzureOpenAIExtractionError as exc:
+            if not exc.raw_response:
+                raise
+            repair_prompt = contract_repair_prompt(
+                original_prompt=prompt,
+                invalid_response=exc.raw_response,
+                errors=[str(exc)],
+                contract_name="extraction_triage_batch.v1",
+            )
+            result = self.run_json_prompt(repair_prompt)
+            attempts = (
+                {
+                    "attempt": 1,
+                    "status": "parse_error",
+                    "error": str(exc),
+                    "raw_response": exc.raw_response,
+                },
+                {
+                    "attempt": 2,
+                    "status": "retry_response",
+                    "retry_reason": "json_parse_failed",
+                    "raw_response": result.raw_output,
+                    "parsed_output": result.parsed_payload,
+                },
+            )
+        raw_output, parsed_payload = result
+        return ExtractionAttempt(
+            parsed_payload=parsed_payload,
+            prompt=prompt,
+            raw_response=raw_output,
+            extractor_type="azure_openai",
+            model=self._deployment(),
+            prompt_version="azure_msg_triage.v1",
+            deployment_name=result.deployment_name,
+            api_version=result.api_version,
+            request_parameters=result.request_parameters,
+            raw_usage=result.raw_usage,
+            prompt_tokens=result.prompt_tokens,
+            completion_tokens=result.completion_tokens,
+            total_tokens=result.total_tokens,
+            cached_prompt_tokens=result.cached_prompt_tokens,
+            reasoning_tokens=result.reasoning_tokens,
+            latency_ms=result.latency_ms,
+            attempts=attempts,
+        )
+
+    def extract_msg_with_triage(
+        self,
+        parsed_msg: ParsedMsg,
+        attachment_records: list[dict[str, Any]],
+        triage_batch: ExtractionTriageBatch,
+        asset_reference_rows: list[dict[str, Any]] | None = None,
+    ) -> ExtractionAttempt:
+        prompt = _prompt(
+            parsed_msg,
+            attachment_records,
+            asset_reference_rows=asset_reference_rows,
+            triage_payload=triage_batch.raw,
+        )
+        try:
+            result = self.run_json_prompt(prompt)
+            attempts: tuple[dict[str, Any], ...] = ()
+        except AzureOpenAIExtractionError as exc:
+            if not exc.raw_response:
+                raise
+            repair_prompt = contract_repair_prompt(
+                original_prompt=prompt,
+                invalid_response=exc.raw_response,
+                errors=[str(exc)],
+                contract_name="extraction_batch.v1",
+            )
+            result = self.run_json_prompt(repair_prompt)
+            attempts = (
+                {
+                    "attempt": 1,
+                    "status": "parse_error",
+                    "error": str(exc),
+                    "raw_response": exc.raw_response,
+                },
+                {
+                    "attempt": 2,
+                    "status": "retry_response",
+                    "retry_reason": "json_parse_failed",
+                    "raw_response": result.raw_output,
+                    "parsed_output": result.parsed_payload,
+                },
+            )
+        raw_output, parsed_payload = result
+        extractor = parsed_payload.get("extractor", {})
+        return ExtractionAttempt(
+            parsed_payload=parsed_payload,
+            prompt=prompt,
+            raw_response=raw_output,
+            extractor_type=str(extractor.get("type") or "azure_openai"),
+            model=extractor.get("model") if isinstance(extractor.get("model"), str) else self._deployment(),
+            prompt_version=extractor.get("prompt_version") if isinstance(extractor.get("prompt_version"), str) else "azure_msg_targeted_extraction.v1",
             deployment_name=result.deployment_name,
             api_version=result.api_version,
             request_parameters=result.request_parameters,
@@ -285,6 +406,7 @@ def _prompt(
     parsed_msg: ParsedMsg,
     attachment_records: list[dict[str, Any]],
     asset_reference_rows: list[dict[str, Any]] | None = None,
+    triage_payload: dict[str, Any] | None = None,
 ) -> str:
     attachment_summary = [
         {
@@ -323,13 +445,23 @@ def _prompt(
             if isinstance(row, dict)
         ],
     }
+    triage_section = ""
+    if triage_payload:
+        triage_section = (
+            "Validated triage from the first LLM pass:\n"
+            f"{json.dumps(triage_payload, indent=2, sort_keys=True)}\n"
+            "Use this triage only to keep detailed extraction focused on the listed items and source attachments. "
+            "If detailed evidence conflicts with triage, preserve the safer AP-risk facts in the extraction payload. "
+            "Still return a complete extraction_batch.v1 object; do not return triage fields in the final extraction.\n\n"
+            f"{_route_guidance(triage_payload)}\n"
+        )
     return (
         "You are the local LLM extractor for the AP Automation system.\n"
         "Return only one JSON object. Do not include Markdown, prose, or code fences.\n"
         f"{COMPACT_EXTRACTION_BATCH_CONTRACT}\n"
         f"{TYPE_CONTRACT_RULES}\n"
-        "Return an extraction_batch.v1 envelope with one item per AP workflow-relevant non-inline attachment and, only when the email body independently contains routing facts or exceptions, one email-level item. Each item.extraction must be a complete extraction.v1 payload with required sections present. Put clearly irrelevant reviewed attachments in batch-level excluded_attachments, not in items. The deterministic rules engine will make final routing decisions.\n"
-        "Thread-aware email body handling: email.latest_body_text is authoritative for the current email-level AP action. email.body_text is the full message body retained for context and audit. Quoted history may provide background only when latest_body_text explicitly reactivates or asks about that prior invoice or document. Do not create invoice, link-only, vendor-question, wrong-destination, property-routing, or other current actionable facts from quoted history alone. Set observed_facts.latest_reply_indicates_no_ap_action=true only when email.latest_body_text itself indicates a non-actionable acknowledgement, courtesy/social reply, or confirmation that the recipient will handle/process the prior item, and does not ask a question, report a wrong destination, introduce a new invoice/payment/link action, or cite a current attachment.\n"
+        "Return an extraction_batch.v1 envelope with one item per AP workflow-relevant non-inline attachment and, only when the email body independently contains routing facts or exceptions not already represented by a selected readable attachment, one email-level item. Routine cover text that says an invoice, bill, statement, or document is attached is context for the attachment item only and must not create a separate email-level item. Generated invoice email summaries, including BuildOps-style bodies that repeat invoice number, due date, total, balance due, bill-to, or payment summary, are also context only when a selected readable invoice attachment already contains the same invoice. If validated triage includes an email-only item but detailed evidence shows the email body only duplicates a selected readable attachment, omit that email item from the final extraction_batch.v1. Bill-to-only facts in the email body must not create a second invoice item when the attachment has stronger service, property, site, or location evidence. Each item.extraction must be a complete extraction.v1 payload with required sections present. Put clearly irrelevant reviewed attachments in batch-level excluded_attachments, not in items. The deterministic rules engine will make final routing decisions.\n"
+        "Thread-aware email body handling: email.latest_body_text is authoritative for the current email-level AP action. email.body_text is the full message body retained for context and audit. Quoted history may provide background only when latest_body_text explicitly reactivates or asks about that prior invoice or document. A forwarded message can reactivate quoted AP content when it is sent to the AP mailbox for handling, even when the current latest body is empty, signature-only, or contact-card-only. Do not create invoice, link-only, vendor-question, wrong-destination, property-routing, statement, or other current actionable facts from quoted history alone unless the current message context is a forward or other current submission that makes the quoted content the thing being sent for AP handling. Set observed_facts.latest_reply_indicates_no_ap_action=true only when email.latest_body_text itself contains actual non-action language: an acknowledgement, courtesy/social reply, FYI-only note, or confirmation that the recipient will handle/process the prior item. Empty latest body, signature-only latest body, contact-card-only latest body, or an internal sender alone is not social/no-action language. A forward or reply may still be social/no-action only when the latest-body words look like social/no-action language, such as \"Thanks, handled\", \"FYI only\", \"I already sent this\", or \"No action needed\". If the language or context is fuzzy, lean toward leaving latest_reply_indicates_no_ap_action=false and preserving AP-risk facts. Do not set latest_reply_indicates_no_ap_action=true when the latest body asks a question, reports a wrong destination, introduces a new invoice/payment/link action, cites a current attachment, or is empty/signature-only while quoted history contains invoice, payment-link, statement, vendor-question, or other AP workflow facts. The same no-action reply must also not introduce a current statement action. Treat an internal @hillwood.com sender as a positive indicator for this extraction fact only when actual no-action language is present, not as an outcome or destination. Examples that should set latest_reply_indicates_no_ap_action=true when no current AP evidence is attached or introduced include \"Thank you. I just sent it.\", \"Received, thank you.\", \"I resent it.\", and \"I will handle this.\" Quoted statement, invoice, or vendor-question history must not override a latest-body no-action acknowledgement.\n"
         "AP workflow-relevant attachments include invoices, statements, payment inquiries, lien releases or waivers, contracts, pay applications, check requests, account summaries, past-due notices, ACH or auto-draft notices, Ben E Keith notices, wrong-destination evidence, and documents with invoice, payment, property, vendor, amount, account, or routing facts. "
         "Omit clearly irrelevant attachments from items after reviewing selected attachment text, Document Intelligence text, filename, and email context. Clearly irrelevant means the attachment has no invoice, payable amount, vendor, invoice number, property, account, payment, hard-exception, or other AP workflow facts, such as a generic sign photo, legal notice image unrelated to the invoice, logo, or decorative/non-business image. "
         "Standalone payment-instruction support PDFs may be put in excluded_attachments with reason_code=\"payment_instruction_support\" only when at least one separate valid invoice item exists in the same batch and the standalone support PDF contains no invoice number, payable amount, bill-to/property/service address, statement balance, vendor question, dispute, missing-remittance question, unsupported invoice evidence, lien waiver, work ticket, backup packet, contract, pay application, or other hard-exception content. "
@@ -351,6 +483,10 @@ def _prompt(
         "When visible source text exactly matches or is a clear semantic near-match to exactly one listed asset, populate canonical normalized lookup candidates such as property_lookup.property_name=[\"alliance gateway 34\"] and property_lookup.property_code=[\"gw34\"]. "
         "Clear semantic near-matches include missing common portfolio prefixes, suffix variants, number-format variants, and configured alias variants when only one asset_reference row fits the visible phrase, such as Gateway 15 -> Alliance Gateway 15 / GW15, Circle T Golf Course -> Circle T Golf / CTG, and Heritage Commons 2 -> Heritage Commons II / HC2. "
         "Do not normalize vague family names or ambiguous partial names such as Gateway, Circle T, Commons, or Westport into a property code or property_name when multiple configured assets could fit; keep those uncertain values in business_signals.possible_property_aliases or evidence.summary. "
+        "Preserve visible asset-code families exactly. Codes such as WP9, GW9, HC2, HWC2, ACC 14, and ACN5 identify different configured alias families unless the source visibly provides an accepted alias variant. "
+        "Do not convert a visible Westport/WP code into an Alliance Gateway/GW code, or a visible Gateway/GW code into a Westport/WP code. "
+        "Negative example: source text \"Service at: WP9 400 Intermodal Pkwy\" with asset_reference containing WP9 / Alliance Westport 9 and GW9 / Alliance Gateway 9 must not return gw9 or alliance gateway 9; it should return property_lookup.property_code=[\"wp9\"] and property_lookup.property_name=[\"alliance westport 9\"] when supported, or omit the property_name if not confidently supported. "
+        "If a visible code and a proposed canonical property name conflict, keep the visible code, remove the unsupported canonical name, lower confidence.property_identity, and set observed_facts.has_conflicting_signals=true. "
         "Labeled identity fields such as Project, Job, Site, Location, Service Location, Property, Building, Facility, Work Site, Ship To, Deliver To, Sold To, Customer, Account, Attention, and similar labels are source-visible property identity evidence when their values contain property, building, site, tenant, address, or asset-code facts. "
         "Do not limit property evidence capture to Bill To or Ship To blocks; vendors may use nonstandard labels or unlabeled adjacent customer/site/address blocks. "
         "When a labeled or adjacent name/address block contains both a generic legal customer name and a more specific visible asset/property/site name, preserve the specific name separately in property_lookup.property_name when it matches asset_reference, or in business_signals.possible_property_aliases when uncertain. "
@@ -371,6 +507,7 @@ def _prompt(
         "If asset_reference contains Hillwood Commons II / HWC2 and the source visibly says Hillwood Commons II, normalize to property_lookup.property_name=[\"hillwood commons ii\"] and property_lookup.property_code=[\"hwc2\"]. "
         "Do not convert visible Hillwood Commons II to Heritage Commons II / HC2 unless the source visibly says Heritage Commons II or HC2. "
         "When visible source text contains Alliance Gateway shorthand such as AG31, AG 31, or AG-31, and asset_reference contains the corresponding Alliance Gateway building, treat that shorthand as visible evidence for Alliance Gateway 31 and normalize to the listed asset_reference asset_name and configured asset_alias. "
+        "AG shorthand is an explicit exception for Alliance Gateway only; do not treat WP, GW, HC, HWC, ACC, ACN, or other configured alias prefixes as interchangeable. "
         "Final source-support check before returning JSON: verify every invoice.property_code, invoice.property_name, property_lookup.property_code, and property_lookup.property_name value against email subject, email body, selected attachment text, or attachment metadata. "
         "The asset_reference list is not source evidence for this check. "
         "If a property code or property name is only inferred from asset_reference, remove it from property_lookup arrays and set invoice.property_code or invoice.property_name to null. "
@@ -462,15 +599,14 @@ def _prompt(
         "Use evidence.source_attachments for filenames and evidence.source_refs for attachment-specific page citations.\n"
         "Set observed_facts.indicates_wrong_destination=true only when the message explicitly says a prior routing recipient was the wrong person, "
         "should not have received the email, or asks AP to escalate because the destination was wrong.\n"
-        "Set observed_facts.current_invoice_is_past_due=true only when the current payable invoice is itself explicitly past due, overdue, in collection, or the document is a true past-due notice. "
-        "Require explicit wording such as past due, overdue, due date, payment due, please remit by, or collection/reminder language before setting current-invoice past-due facts. "
+        "Set observed_facts.current_invoice_is_past_due=true only when the current email subject or body explicitly calls the payable invoice past due, overdue, in collection, or a true past-due notice. "
+        "Do not use attachment-only labels, invoice due dates, payment due dates, remit-by dates, or invoice date comparisons to set current-invoice past-due facts. "
         "Do not set observed_facts.current_invoice_is_past_due=true merely because an invoice says payable upon receipt, because invoice.due_date is before email.received_at.date(), or because invoice_date was copied into invoice.due_date. "
         "Extract invoice.due_date only when the source text explicitly labels a concrete calendar date as the due date, payment due date, remit-by date, or equivalent payment deadline. "
         "Do not populate invoice.due_date for due-on-receipt, due upon receipt, payable upon receipt, net due upon receipt, or similar receipt-based payment terms. "
         "Do not infer invoice.due_date from invoice date, service date, activity date, posting date, email received date, receipt-based terms, or due-on-receipt language. "
         "Do not copy invoice_date into invoice.due_date unless the document explicitly presents that date as the payment due date. "
-        "For payable current invoices with an explicitly labeled due date or payment due date before email.received_at.date(), set observed_facts.current_invoice_is_past_due=true. "
-        "Payment-status follow-up emails for the current invoice may set current_invoice_is_past_due=true only when the follow-up or invoice text explicitly asks for overdue/past-due/collection handling or payment after a labeled due date. "
+        "Payment-status follow-up emails for the current invoice may set current_invoice_is_past_due=true only when the current email subject or body explicitly asks for overdue, past-due, or collection handling. "
         "Statements and account summaries with aging tables, open items, or account-level past-due balances remain statement/account-summary filing candidates and must not be classified as past-due notices unless the document is explicitly a past-due or collection notice. "
         "Set it false when the current invoice amount or balance due is in the Current aging bucket, even if other past-due aging buckets are nonzero. "
         "Set observed_facts.account_has_past_due_aging_balance=true when a separate account-level aging table or footer shows nonzero past-due balances outside the current invoice. "
@@ -582,6 +718,98 @@ def _prompt(
         "Set indicates_vendor_question_or_payment_inquiry only when the sender is asking AP to answer, confirm, research, reconcile, or explain a payment/account question, such as missing remittance, "
         "which invoice an ACH paid, payment-to-invoice matching, multiple possible open invoices for one payment, account reconciliation, dispute, credit, duplicate payment confirmation, or missing backup/support questions.\n\n"
         "Wrong-destination replies are distinct from vendor questions: set indicates_wrong_destination only for explicit wrong-recipient escalation messages.\n\n"
+        "Input email and attachment metadata:\n"
+        f"{triage_section}"
+        f"{json.dumps(input_payload, indent=2, sort_keys=True)}\n"
+    )
+
+
+def _route_guidance(triage_payload: dict[str, Any]) -> str:
+    routes = {
+        item.get("extraction_route")
+        for item in triage_payload.get("items", [])
+        if isinstance(item, dict) and isinstance(item.get("extraction_route"), str)
+    }
+    guidance = ["Route-specific detail guidance:"]
+    if "invoice_detail" in routes:
+        guidance.append("- For invoice_detail items, focus on payable invoice fields, property lookup signals, amount/date/vendor facts, and AP exception flags.")
+    if "statement_detail" in routes:
+        guidance.append("- For statement_detail items, focus on statement/account-summary/notice facts, filing-relevant observed facts, and avoid inventing payable invoice fields.")
+    if "exception_detail" in routes:
+        guidance.append("- For exception_detail items, focus on source-visible risk facts such as link-only, vendor inquiry, wrong destination, past due, contracts, pay applications, unsupported files, and conflicting signals.")
+    if "notice_detail" in routes:
+        guidance.append("- For notice_detail items, focus on ACH, auto-draft, Ben E Keith, appointment, informational, and non-payable notice facts.")
+    if "email_only_detail" in routes:
+        guidance.append("- For email_only_detail items, use the current email body as evidence and do not create facts from unrelated attachments.")
+    if "no_detail" in routes:
+        guidance.append("- For no_detail items, return only a safe non-payable email-level extraction when current source text clearly supports no AP action.")
+    return "\n".join(guidance)
+
+
+def _triage_prompt(parsed_msg: ParsedMsg, attachment_records: list[dict[str, Any]]) -> str:
+    attachment_summary = [
+        {
+            "file_name": record["file_name"],
+            "content_type": record.get("content_type"),
+            "storage_path": record.get("storage_path"),
+            "file_size_bytes": record.get("file_size_bytes"),
+            "sha256": record.get("sha256"),
+            "text_excerpt": record.get("text_excerpt"),
+            "extractor_selection": (record.get("metadata") or {}).get("extractor_selection") if isinstance(record.get("metadata"), dict) else None,
+            "pdf_evaluation": (record.get("metadata") or {}).get("pdf_evaluation") if isinstance(record.get("metadata"), dict) else None,
+            "document_intelligence": (record.get("metadata") or {}).get("document_intelligence") if isinstance(record.get("metadata"), dict) else None,
+        }
+        for record in attachment_records
+    ]
+    input_payload = {
+        "email": {
+            "subject": parsed_msg.subject,
+            "sender_email": parsed_msg.sender_email,
+            "sender_name": parsed_msg.sender_name,
+            "received_at": parsed_msg.received_at.isoformat() if parsed_msg.received_at else None,
+            "latest_body_text": latest_body_text(parsed_msg.metadata, parsed_msg.body_text),
+            "body_text": parsed_msg.body_text,
+            "thread_context": (parsed_msg.metadata or {}).get("thread_context"),
+            "transport_headers": parsed_msg.transport_headers,
+        },
+        "attachments": attachment_summary,
+    }
+    document_types = ", ".join(sorted(DOCUMENT_TYPES))
+    return (
+        "You are the first-pass triage classifier for the AP Automation system.\n"
+        "Return only one JSON object. Do not include Markdown, prose, or code fences.\n"
+        "Return exactly one extraction_triage_batch.v1 object with schema_version, excluded_attachments, and items.\n"
+        "Triage is for itemization, document classification, AP relevance, extraction-route selection, and source-visible risk flags only.\n"
+        "Do not return workflow rules, outcomes, destinations, destination emails, recipients, property candidates, or final routing decisions.\n"
+        "Every AP workflow-relevant attachment or email body source must appear as an item. Omit only clearly irrelevant attachments through excluded_attachments.\n"
+        "Use one item per distinct AP workflow-relevant document. Do not merge invoice facts across attachments.\n"
+        "Allowed item_kind values: attachment, email.\n"
+        f"Allowed document_type values: {document_types}.\n"
+        "Allowed extraction_route values: invoice_detail, statement_detail, exception_detail, notice_detail, email_only_detail, no_detail.\n"
+        "Allowed risk_flags values: multi_invoice, separate_supporting_document, link_only, contract_or_pay_application, vendor_question_or_payment_inquiry, wrong_destination, past_due, unsupported_attachment, low_text_quality, conflicting_signals.\n"
+        "Use the multi_invoice risk_flag only when one attached PDF visibly contains multiple distinct payable invoices, such as multiple invoice numbers, repeated invoice headers, or multiple complete payable invoice sections inside the same PDF. "
+        "Do not use the multi_invoice risk_flag for a single invoice with line items, subtotal/tax/total rows, credits/payments rows, balance due, one invoice number, one total, one balance due, or an aging table with Current, 1-30, 31-60, 61-90, or 90+ buckets. "
+        "Do not use the multi_invoice risk_flag merely because the email mentions an invoice number, the filename contains an invoice number, or there are multiple separate invoice attachments; separate invoice PDFs are separate items.\n"
+        "Use the past_due risk_flag only when the current email subject or body explicitly calls the payable invoice past due, overdue, in collection, or a true past-due notice. "
+        "Do not use the past_due risk_flag merely because an invoice contains an aging table or nonzero 1-30, 31-60, 61-90, or 90+ past-due buckets. "
+        "When the document shows account-level aging balances but the current invoice is not explicitly past due, mention the aging table in reason and do not include past_due in risk_flags.\n"
+        "Use invoice_detail for payable invoices, check requests, and invoice-like bills requiring field extraction.\n"
+        "Use statement_detail for statements, account summaries, receipts, ACH notices, auto-draft notices, and Ben E Keith notices.\n"
+        "Use exception_detail for contracts, pay applications, lien releases, multi-invoice PDFs, link-only invoices, vendor questions, payment inquiries, wrong-destination replies, past-due notices, unsupported files with AP facts, and ambiguous high-risk content.\n"
+        "Use email_only_detail only when the current email body independently contains AP workflow facts that selected readable attachments do not already hold as item evidence.\n"
+        "Do not create an email item for routine cover text that only says an invoice, bill, statement, or document is attached when a selected readable attachment already contains that item evidence. Also do not create an email item for generated invoice summary text, including BuildOps-style bodies, that repeats invoice number, due date, total, balance due, bill-to, or payment summary for a readable attached invoice. In those cases, the email body is context for the attachment item only.\n"
+        "Use no_detail only for safely non-payable no-action email items; do not use no_detail for any invoice, statement, exception, notice, unsupported attachment, or ambiguous AP-relevant source.\n"
+        "For thread replies and forwards, email.latest_body_text is authoritative for the current email-level action, and quoted history is background unless the current message context makes the quoted content the submitted AP item. "
+        "A forwarded message can reactivate quoted AP content when it is sent to the AP mailbox for handling. Empty latest body, signature-only latest body, contact-card-only latest body, or an internal sender alone is not social/no-action language. "
+        "A short internal @hillwood.com reply such as \"Thank you. I just sent it.\", \"Received, thank you.\", or \"I resent it.\" may be a safe no_detail item only when the latest-body words look like social/no-action language and it does not ask a question, report a wrong destination, cite a current attachment as AP evidence, or introduce new invoice, payment, statement, link, vendor-question, or property-routing facts. "
+        "If the language or context is fuzzy, lean away from no_detail and preserve AP-risk facts for detail extraction. Do not classify a current reply as statement_detail only because quoted history or the subject mentions a statement.\n"
+        "Set requires_detail_extraction=true for every AP-relevant item except safe no_detail items.\n"
+        "Return this exact shape:\n"
+        "{\n"
+        "  \"schema_version\":\"extraction_triage_batch.v1\",\n"
+        "  \"excluded_attachments\":[{\"file_name\":\"name.ext\",\"reason_code\":\"irrelevant_to_ap_workflow|payment_instruction_support\",\"reason\":\"short reason\",\"source\":\"document_intelligence|pymupdf|filename|email_context\"}],\n"
+        "  \"items\":[{\"item_kind\":\"attachment|email\",\"item_key\":\"stable unique key\",\"display_name\":\"string or null\",\"source_attachments\":[\"name.ext\"],\"document_type\":\"invoice\",\"requires_detail_extraction\":true,\"extraction_route\":\"invoice_detail\",\"risk_flags\":[],\"confidence\":0.0,\"reason\":\"short source-visible reason\"}]\n"
+        "}\n"
         "Input email and attachment metadata:\n"
         f"{json.dumps(input_payload, indent=2, sort_keys=True)}\n"
     )

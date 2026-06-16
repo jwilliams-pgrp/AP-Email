@@ -39,6 +39,18 @@ def test_function_app_exposes_asset_custom_workflow_routes() -> None:
     assert 'service.delete_workflow_asset_custom(req.route_params["asset_custom_id"])' in function_app
 
 
+def test_function_app_monitor_routes_forward_date_search_params() -> None:
+    function_app = (ROOT / "function_app.py").read_text(encoding="utf-8")
+
+    assert 'service.monitor_summary(req.params.get("start_date"), req.params.get("end_date"))' in function_app
+    assert 'service.monitor_throughput(req.params.get("start_date"), req.params.get("end_date"))' in function_app
+    assert 'service.monitor_escalate_reasons(req.params.get("start_date"), req.params.get("end_date"))' in function_app
+    assert 'service.monitor_destinations(req.params.get("start_date"), req.params.get("end_date"))' in function_app
+    assert 'req.params.get("q") or ""' in function_app
+    assert 'service.monitor_recent_runs(_int_query(req, "limit", 25, 1, 100))' not in function_app
+    assert '_int_query(req, "days", 7, 1, 365)' not in function_app
+
+
 def test_function_app_config_uses_identity_without_pythonpath_workaround() -> None:
     bicep = (ROOT / "infra" / "main.bicep").read_text(encoding="utf-8")
 

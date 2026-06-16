@@ -202,6 +202,58 @@ class PropertyMatchAssistantTests(unittest.TestCase):
         self.assertIn("Alliance Gateway 31", prompt)
         self.assertIn("\"asset_alias\": \"GW31\"", prompt)
 
+    def test_prompt_rejects_cross_family_wp_to_gw_pollution(self) -> None:
+        assistant = PropertyMatchAssistant(FakeLlmExtractor(_interpretation_payload("asset-WP9", asset_alias="WP9")))
+
+        assistant.suggest(
+            validate_extraction(
+                _payload(
+                    property_code="wp9",
+                    property_name="alliance gateway 9",
+                    service_address="WP9 400 intermodal pkwy",
+                    evidence_summary="Service at: WP9 400 intermodal pkwy.",
+                    property_lookup={
+                        "property_code": ["wp9"],
+                        "property_name": ["alliance gateway 9"],
+                        "tenant": [],
+                        "address": ["400 intermodal parkway"],
+                        "suite": [],
+                        "city": ["fort worth"],
+                        "state": ["tx"],
+                        "zipcode": ["76177"],
+                        "address_candidates": [
+                            {
+                                "rank": 1,
+                                "label": "service_location",
+                                "street": "400 intermodal parkway",
+                                "city": "fort worth",
+                                "state": "tx",
+                                "zipcode": "76177",
+                                "normalized_address": "400 intermodal parkway fort worth tx 76177",
+                                "source": "attachment:owl.pdf:1",
+                                "confidence": 0.98,
+                                "evidence_text": "Service at: WP9 400 intermodal pkwy",
+                            }
+                        ],
+                    },
+                )
+            ),
+            [
+                {**_alias("WP9"), "asset_id": "asset-WP9", "asset_alias": "WP9", "asset_name": "Alliance Westport 9"},
+                {**_alias("GW9"), "asset_id": "asset-GW9", "asset_alias": "GW9", "asset_name": "Alliance Gateway 9"},
+            ],
+        )
+
+        prompt = assistant.llm_extractor.prompt
+        self.assertIn("Preserve visible asset-code families exactly", prompt)
+        self.assertIn("WP9, GW9, HC2, HWC2, ACC 14, and ACN5 are distinct alias families", prompt)
+        self.assertIn("Do not convert visible Westport/WP evidence into Alliance Gateway/GW evidence", prompt)
+        self.assertIn("If source evidence says WP9 and a candidate is GW9 / Alliance Gateway 9, do not select GW9", prompt)
+        self.assertIn("If extracted property_code and property_name conflict", prompt)
+        self.assertIn("Service at: WP9 400 intermodal pkwy", prompt)
+        self.assertIn("\"asset_alias\": \"WP9\"", prompt)
+        self.assertIn("\"asset_alias\": \"GW9\"", prompt)
+
     def test_prompt_treats_unique_near_name_as_disambiguating_evidence(self) -> None:
         assistant = PropertyMatchAssistant(FakeLlmExtractor(_interpretation_payload("asset-GW15", asset_alias="GW15")))
 

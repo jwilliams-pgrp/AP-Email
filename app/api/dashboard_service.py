@@ -68,6 +68,61 @@ def cutoff(days: int) -> datetime:
     return datetime.now(timezone.utc) - timedelta(days=days)
 
 
+def default_date_window() -> tuple[date, date]:
+    end = datetime.now(timezone.utc).date()
+    return end - timedelta(days=14), end
+
+
+def parse_date_window(start_date: str | None = None, end_date: str | None = None) -> tuple[datetime, datetime, date, date]:
+    default_start, default_end = default_date_window()
+    try:
+        start_day = date.fromisoformat(start_date) if start_date else default_start
+        end_day = date.fromisoformat(end_date) if end_date else default_end
+    except ValueError as exc:
+        raise DashboardError(400, "Dates must use YYYY-MM-DD format.") from exc
+    if start_day > end_day:
+        raise DashboardError(400, "start_date must be on or before end_date.")
+    start = datetime.combine(start_day, datetime.min.time(), tzinfo=timezone.utc)
+    end_exclusive = datetime.combine(end_day + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc)
+    return start, end_exclusive, start_day, end_day
+
+
+def _email_search_predicate() -> str:
+    return """
+              %s = '%%' or lower(coalesce(e.subject, '')) like %s
+              or lower(coalesce(e.sender_email, '')) like %s
+              or lower(coalesce(e.metadata ->> 'sender_name', '')) like %s
+              or lower(coalesce(e.metadata::text, '')) like %s
+              or lower(coalesce(e.source_message_id, '')) like %s
+              or lower(coalesce(e.idempotency_key, '')) like %s
+              or lower(e.email_id::text) like %s
+              or lower(coalesce(d.reason, '')) like %s
+              or lower(coalesce(d.destination_code, '')) like %s
+              or lower(coalesce(d.matched_rule_code, '')) like %s
+              or lower(coalesce(d.extracted_fields::text, '')) like %s
+              or lower(coalesce(i.vendor_name, '')) like %s
+              or lower(coalesce(i.invoice_number, '')) like %s
+              or lower(coalesce(i.amount::text, '')) like %s
+              or lower(coalesce(i.metadata::text, '')) like %s
+              or lower(coalesce(x.parsed_output::text, '')) like %s
+    """
+
+
+def _email_search_params(q: str) -> list[Any]:
+    pattern = f"%{q.lower()}%"
+    return [pattern] * 17
+
+
+def _latest_extraction_lateral_sql() -> str:
+    return """
+              select x2.*
+              from extractions x2
+              where x2.email_id = e.email_id
+              order by x2.created_at desc
+              limit 1
+    """
+
+
 def require_local_artifact(path_value: str | None) -> Path:
     if not path_value:
         raise DashboardError(404, "Artifact path is missing.")
@@ -163,35 +218,35 @@ def health() -> dict[str, Any]:
     return {"status": "ok", "db_time": json_ready(db_time), "mode": RUNTIME_CONFIG.app_env.value}
 
 
-def monitor_summary(days: int = 7) -> dict[str, Any]:
-    start = cutoff(days)
+def monitor_summary(start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
+    start, end_exclusive, start_day, end_day = parse_date_window(start_date, end_date)
     with connect() as conn:
         outcome_rows = conn.execute(
             """
             select d.outcome::text as outcome, count(*)::int as count
             from decisions d
-            where d.created_at >= %s
+            where d.created_at >= %s and d.created_at < %s
             group by d.outcome
             """,
-            (start,),
+            (start, end_exclusive),
         ).fetchall()
         run_rows = conn.execute(
             """
             select status, count(*)::int as count
             from audit_runs
-            where started_at >= %s
+            where started_at >= %s and started_at < %s
             group by status
             """,
-            (start,),
+            (start, end_exclusive),
         ).fetchall()
         open_escalate = conn.execute("select count(*)::int as count from escalate_queue").fetchone()["count"]
         avg_seconds = conn.execute(
             """
             select avg(extract(epoch from completed_at - started_at)) as seconds
             from audit_runs
-            where started_at >= %s and completed_at is not null
+            where started_at >= %s and started_at < %s and completed_at is not null
             """,
-            (start,),
+            (start, end_exclusive),
         ).fetchone()["seconds"]
         confidence = conn.execute(
             """
@@ -200,9 +255,9 @@ def monitor_summary(days: int = 7) -> dict[str, Any]:
               count(*) filter (where confidence >= 0.90 and confidence < 0.95)::int as medium,
               count(*) filter (where confidence < 0.90)::int as low
             from decisions
-            where created_at >= %s
+            where created_at >= %s and created_at < %s
             """,
-            (start,),
+            (start, end_exclusive),
         ).fetchone()
 
     outcomes = {row["outcome"]: row["count"] for row in outcome_rows}
@@ -214,7 +269,9 @@ def monitor_summary(days: int = 7) -> dict[str, Any]:
 
     return json_ready(
         {
-            "days": days,
+            "start_date": start_day.isoformat(),
+            "end_date": end_day.isoformat(),
+            "days": (end_day - start_day).days + 1,
             "total_processed": total,
             "outcomes": outcomes,
             "runs": runs,
@@ -233,28 +290,28 @@ def monitor_summary(days: int = 7) -> dict[str, Any]:
     )
 
 
-def monitor_throughput(days: int = 7) -> list[dict[str, Any]]:
-    start = cutoff(days)
+def monitor_throughput(start_date: str | None = None, end_date: str | None = None) -> list[dict[str, Any]]:
+    start, end_exclusive, _start_day, _end_day = parse_date_window(start_date, end_date)
     with connect() as conn:
         decision_rows = conn.execute(
             """
             select date_trunc('day', d.created_at)::date as day, d.outcome::text as outcome, count(*)::int as count
             from decisions d
-            where d.created_at >= %s and d.outcome in ('AUTO', 'ESCALATE', 'FILE')
+            where d.created_at >= %s and d.created_at < %s and d.outcome in ('AUTO', 'ESCALATE', 'FILE')
             group by 1, 2
             order by 1
             """,
-            (start,),
+            (start, end_exclusive),
         ).fetchall()
         failed_rows = conn.execute(
             """
             select date_trunc('day', started_at)::date as day, count(*)::int as count
             from audit_runs
-            where started_at >= %s and status = 'failed'
+            where started_at >= %s and started_at < %s and status = 'failed'
             group by 1
             order by 1
             """,
-            (start,),
+            (start, end_exclusive),
         ).fetchall()
     by_day: dict[str, dict[str, Any]] = {}
     outcome_to_category = {"AUTO": "automated", "ESCALATE": "escalate", "FILE": "filed"}
@@ -269,24 +326,26 @@ def monitor_throughput(days: int = 7) -> list[dict[str, Any]]:
     return [by_day[key] for key in sorted(by_day)]
 
 
-def monitor_escalate_reasons(days: int = 7) -> list[dict[str, Any]]:
+def monitor_escalate_reasons(start_date: str | None = None, end_date: str | None = None) -> list[dict[str, Any]]:
+    start, end_exclusive, _start_day, _end_day = parse_date_window(start_date, end_date)
     with connect() as conn:
         rows = conn.execute(
             """
             select coalesce(rq.reason, d.reason) as reason, count(*)::int as count
             from decisions d
             left join escalate_queue rq on rq.decision_id = d.decision_id
-            where d.created_at >= %s and d.outcome in ('ESCALATE', 'FLAG')
+            where d.created_at >= %s and d.created_at < %s and d.outcome in ('ESCALATE', 'FLAG')
             group by 1
             order by count(*) desc, reason
             limit 10
             """,
-            (cutoff(days),),
+            (start, end_exclusive),
         ).fetchall()
     return rows
 
 
-def monitor_destinations(days: int = 7) -> list[dict[str, Any]]:
+def monitor_destinations(start_date: str | None = None, end_date: str | None = None) -> list[dict[str, Any]]:
+    start, end_exclusive, _start_day, _end_day = parse_date_window(start_date, end_date)
     with connect() as conn:
         return conn.execute(
             """
@@ -295,12 +354,12 @@ def monitor_destinations(days: int = 7) -> list[dict[str, Any]]:
                    count(*)::int as count
             from decisions d
             left join routing_destinations rd on rd.destination_code = d.destination_code
-            where d.created_at >= %s
+            where d.created_at >= %s and d.created_at < %s
             group by 1, 2
             order by count(*) desc, display_name
             limit 10
             """,
-            (cutoff(days),),
+            (start, end_exclusive),
         ).fetchall()
 
 
@@ -325,25 +384,44 @@ def monitor_escalate_emails(limit: int = 25) -> list[dict[str, Any]]:
     return json_ready(rows)
 
 
-def monitor_recent_runs(limit: int = 25) -> list[dict[str, Any]]:
+def monitor_recent_runs(
+    limit: int = 25,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    q: str = "",
+) -> list[dict[str, Any]]:
+    start, end_exclusive, _start_day, _end_day = parse_date_window(start_date, end_date)
+    params: list[Any] = [start, end_exclusive, *_email_search_params(q), limit]
     with connect() as conn:
         rows = conn.execute(
-            """
+            f"""
             select ar.run_id::text, ar.email_id::text, ar.status, ar.started_at, ar.completed_at,
-                   ar.final_outcome::text as final_outcome, e.subject, e.sender_email, d.reason
+                   ar.final_outcome::text as final_outcome, e.subject, e.sender_email, d.reason, d.destination_code
             from audit_runs ar
             left join emails e on e.email_id = ar.email_id
             left join lateral (
-              select reason
+              select reason, destination_code, matched_rule_code, extracted_fields
               from decisions d2
               where d2.run_id = ar.run_id and d2.document_item_id is null
               order by d2.created_at desc
               limit 1
             ) d on true
-            order by ar.started_at desc
+            left join lateral (
+              {_latest_extraction_lateral_sql()}
+            ) x on true
+            left join lateral (
+              select *
+              from invoices i2
+              where i2.email_id = e.email_id
+              order by i2.created_at desc
+              limit 1
+            ) i on true
+            where ar.started_at >= %s and ar.started_at < %s
+              and ({_email_search_predicate()})
+            order by ar.started_at desc, e.received_at desc nulls last, e.created_at desc nulls last
             limit %s
             """,
-            (limit,),
+            params,
         ).fetchall()
     return json_ready(rows)
 
@@ -353,8 +431,7 @@ def email_search(
     outcome: str | None = None,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
-    pattern = f"%{q.lower()}%"
-    params: list[Any] = [pattern, pattern, pattern, pattern, pattern, pattern]
+    params: list[Any] = _email_search_params(q)
     outcome_filter = ""
     if outcome:
         outcome_filter = "and d.outcome = %s"
@@ -366,26 +443,27 @@ def email_search(
             select e.email_id::text, e.subject, e.sender_email, e.received_at,
                    d.outcome::text as outcome, d.reason, d.destination_code,
                    d.confidence, d.created_at as decision_at,
-                   x.parsed_output #>> '{{invoice,vendor_name}}' as vendor_name,
-                   x.parsed_output #>> '{{invoice,invoice_number}}' as invoice_number,
-                   x.parsed_output #>> '{{invoice,property_code}}' as property_code,
-                   x.parsed_output #>> '{{invoice,property_name}}' as property_name
+                   i.vendor_name,
+                   i.invoice_number,
+                   i.metadata ->> 'property_code' as property_code,
+                   i.metadata ->> 'property_name' as property_name
             from emails e
             left join lateral (
               select * from decisions d2 where d2.email_id = e.email_id order by d2.created_at desc limit 1
             ) d on true
             left join lateral (
-              select * from extractions x2 where x2.email_id = e.email_id order by x2.created_at desc limit 1
+              {_latest_extraction_lateral_sql()}
             ) x on true
-            where (
-              %s = '%%' or lower(coalesce(e.subject, '')) like %s
-              or lower(coalesce(e.sender_email, '')) like %s
-              or lower(e.email_id::text) like %s
-              or lower(coalesce(d.reason, '')) like %s
-              or lower(coalesce(x.parsed_output::text, '')) like %s
-            )
+            left join lateral (
+              select *
+              from invoices i2
+              where i2.email_id = e.email_id
+              order by i2.created_at desc
+              limit 1
+            ) i on true
+            where ({_email_search_predicate()})
             {outcome_filter}
-            order by coalesce(d.created_at, e.created_at) desc
+            order by e.received_at desc nulls last, e.created_at desc nulls last
             limit %s
             """,
             params,

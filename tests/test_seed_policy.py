@@ -37,6 +37,8 @@ class SeedPolicyTests(unittest.TestCase):
         allowed_targeted_scripts = {
             "add-appointment-informational-no-action.sql",
             "add-asset-custom-lookup.sql",
+            "add-contractor-timesheet-escalation.sql",
+            "add-zero-dollar-invoice-escalation.sql",
             "update-current-reply-no-action.sql",
         }
         one_time_scripts = [
@@ -67,3 +69,28 @@ class SeedPolicyTests(unittest.TestCase):
         self.assertIn("drop table if exists asset_custom", targeted_sql.lower())
         self.assertIn("create table if not exists asset_custom", targeted_sql.lower())
         self.assertIn("create or replace view vw_asset_lookup", targeted_sql.lower())
+
+    def test_multifamily_assets_route_to_medius_mf_in_replayable_baseline(self) -> None:
+        seed_sql = (ROOT / "db" / "seed.sql").read_text(encoding="utf-8")
+
+        self.assertNotIn("('ESCALATE_MULTIFAMILY', 'MULTIFAMILY'", seed_sql)
+        self.assertIn("('MEDIUS_MF', 'Medius Multifamily Queue'", seed_sql)
+        self.assertIn(
+            "('asset_type_multifamily', 'Multifamily asset routes to Medius MF', 375, true, 'property_asset_type', 'AUTO', 'MEDIUS_MF'",
+            seed_sql,
+        )
+        self.assertIn("where destination_code = 'ESCALATE_MULTIFAMILY'", seed_sql)
+
+    def test_zero_dollar_invoices_escalate_in_replayable_baseline(self) -> None:
+        seed_sql = (ROOT / "db" / "seed.sql").read_text(encoding="utf-8")
+        targeted_sql = (ROOT / "db" / "add-zero-dollar-invoice-escalation.sql").read_text(encoding="utf-8")
+
+        self.assertIn("'ESCALATE_0_DOLLAR_INVOICE'", seed_sql)
+        self.assertIn(
+            "('amount_zero_invoice', 'Zero-dollar invoice requires escalation', 360, true, 'amount_equals_zero', 'ESCALATE', 'ESCALATE_0_DOLLAR_INVOICE'",
+            seed_sql,
+        )
+        self.assertIn("('amount_zero_invoice', 'document_types', '[\"invoice\"]'::jsonb)", seed_sql)
+        self.assertIn("'ESCALATE_0_DOLLAR_INVOICE'", targeted_sql)
+        self.assertIn("'amount_zero_invoice'", targeted_sql)
+        self.assertIn("on conflict (rule_code, version)", targeted_sql.lower())

@@ -536,19 +536,46 @@ class PropertyValueNormalizationTests(unittest.TestCase):
         self.assertIn("'NO_ACTION'", targeted_sql)
         self.assertIn('"indicates_informational_appointment_notice"', targeted_sql)
 
-    def test_seed_includes_alc_escalation_policy(self) -> None:
+    def test_standalone_sql_adds_zero_dollar_invoice_escalation_rule(self) -> None:
+        targeted_sql = Path("db/add-zero-dollar-invoice-escalation.sql").read_text(encoding="utf-8")
+
+        self.assertIn("'ESCALATE_0_DOLLAR_INVOICE'", targeted_sql)
+        self.assertIn("'amount_zero_invoice'", targeted_sql)
+        self.assertIn("'amount_equals_zero'", targeted_sql)
+        self.assertIn("'[\"invoice\"]'::jsonb", targeted_sql)
+        self.assertIn("on conflict (rule_code, version)", targeted_sql.lower())
+
+    def test_seed_excludes_alc_routing_policy(self) -> None:
         seed_sql = Path("db/seed.sql").read_text(encoding="utf-8")
 
-        self.assertIn("'ESCALATE_ALC', 'ALC', null, 'ESCALATE'", seed_sql)
-        self.assertIn("'alc_escalation'", seed_sql)
-        self.assertIn("'alc_escalation', 'business_unit_codes', '[\"ALC\"]'::jsonb", seed_sql)
-        self.assertNotIn("'alc_escalation', 'asset_types'", seed_sql)
-        self.assertIn("'alc_escalation', 'text_phrases', '[\"Alliance Landscape\", \"Alliance Landscaping\"]'::jsonb", seed_sql)
-        self.assertIn("'alc_escalation', 'standalone_terms', '[\"ALC\"]'::jsonb", seed_sql)
-        self.assertIn("'bill_to_alc', 'ALC bill-to routes to Medius ALC', 600, false", seed_sql)
+        self.assertNotIn("('ESCALATE_ALC', 'ALC'", seed_sql)
+        self.assertNotIn("('MEDIUS_ALC', 'Medius ALC", seed_sql)
+        self.assertNotIn("('alc_escalation', 'ALC requires", seed_sql)
+        self.assertNotIn("'alc_signal'", seed_sql)
+        self.assertNotIn("('bill_to_alc', 'ALC bill-to", seed_sql)
+        self.assertNotIn("Alliance Landscape", seed_sql)
+        self.assertNotIn("Alliance Landscaping", seed_sql)
         self.assertIn("'bill_to_mf', 'Multifamily bill-to routes to Medius MF', 610, false", seed_sql)
-        self.assertLess(seed_sql.index("'hard_no_action_email_pattern'"), seed_sql.index("'alc_escalation'"))
-        self.assertLess(seed_sql.index("'alc_escalation'"), seed_sql.index("'amount_over_threshold'"))
+        self.assertIn("where rule_code in ('alc_escalation', 'bill_to_alc')", seed_sql)
+        self.assertIn("where destination_code in ('ESCALATE_ALC', 'MEDIUS_ALC')", seed_sql)
+
+    def test_standalone_sql_removes_alc_routing_policy(self) -> None:
+        targeted_sql = Path("db/remove-alc-routing-policy.sql").read_text(encoding="utf-8")
+
+        self.assertIn("where rule_code in ('alc_escalation', 'bill_to_alc')", targeted_sql)
+        self.assertIn("where destination_code in ('ESCALATE_ALC', 'MEDIUS_ALC')", targeted_sql)
+        self.assertIn("set enabled = false", targeted_sql)
+        self.assertIn("not exists (select 1 from decisions", targeted_sql)
+
+    def test_standalone_sql_removes_multifamily_escalation_policy(self) -> None:
+        targeted_sql = Path("db/remove-multifamily-escalation-policy.sql").read_text(encoding="utf-8")
+
+        self.assertIn("'asset_type_multifamily'", targeted_sql)
+        self.assertIn("'AUTO'", targeted_sql)
+        self.assertIn("'MEDIUS_MF'", targeted_sql)
+        self.assertIn("where destination_code = 'ESCALATE_MULTIFAMILY'", targeted_sql)
+        self.assertIn("set active = false", targeted_sql)
+        self.assertIn("not exists (select 1 from decisions", targeted_sql)
 
 def _base_payload() -> dict:
     return {

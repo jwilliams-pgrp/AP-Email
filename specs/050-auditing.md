@@ -117,7 +117,7 @@ For batch extraction, item-level decisions must be persisted with their document
 Reasons must be human-readable, reference the rule or condition, and avoid vague language.
 
 Good:
-`Invoice amount 15000 exceeds configured threshold 10000; normal destination MEDIUS_ALC is not exempt -> ESCALATE with OVER-10000 label`
+`Invoice amount 15000 exceeds configured threshold 10000; normal destination TIFFANY_BECK is not exempt -> ESCALATE with OVER-10000 label`
 
 Bad:
 `Seems high value`

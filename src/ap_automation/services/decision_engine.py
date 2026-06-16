@@ -280,6 +280,21 @@ class DecisionEngine:
                 return True, f"amount {amount} exceeds threshold {threshold}; destination {normal_destination} requires project number for exemption"
             return True, f"amount {amount} exceeds threshold {threshold} and destination {normal_destination} is not exempt"
 
+        if condition_type == "amount_equals_zero":
+            document_types = _optional_string_set(rule, "document_types")
+            if document_types and extraction.document.document_type not in document_types:
+                return False, f"document_type {extraction.document.document_type} not eligible for zero amount rule"
+            amount = extraction.invoice.amount
+            normal_destination = context.normal_destination_code
+            matched = amount is not None and amount == 0 and normal_destination is not None
+            if amount is None:
+                return False, "amount is missing"
+            if amount != 0:
+                return False, f"amount {amount} is not zero"
+            if normal_destination is None:
+                return False, "amount is zero but no usable automatic destination was available"
+            return matched, f"amount {amount} is zero and normal destination {normal_destination} would auto-route"
+
         if condition_type == "bill_to_business_unit":
             expected_unit = _required_condition(rule, "business_unit_code")
             actual_unit = extraction.business_signals.business_unit_code
@@ -295,10 +310,6 @@ class DecisionEngine:
             actual_asset_type = (property_match.asset_type or "").strip().lower() if property_match else ""
             matched = bool(expected_asset_type) and actual_asset_type == expected_asset_type and not missing_auto_fields
             return matched, f"asset_type {actual_asset_type or 'none'} {'matched' if matched else 'not matched'}"
-
-        if condition_type == "alc_signal":
-            matched, matched_reasons = _match_alc_signal(rule, extraction, context)
-            return matched, "; ".join(matched_reasons) if matched else "no ALC signal matched"
 
         if condition_type == "property_routing_match":
             required = bool(_required_condition(rule, "requires_property_route"))
@@ -505,6 +516,11 @@ class DecisionEngine:
                 f"{context.normal_destination_code} is not exempt or lacks required project number -> "
                 f"ESCALATE with OVER-10000 label"
             )
+        if rule.condition_type == "amount_equals_zero":
+            reason = (
+                f"Invoice amount {extraction.invoice.amount} is zero; normal destination "
+                f"{context.normal_destination_code} would auto-route -> ESCALATE with 0-DOLLAR-INVOICE label"
+            )
         if rule.condition_type == "confidence_threshold":
             reason = (
                 f"Confidence {extraction.confidence.overall} compared to configured threshold "
@@ -652,61 +668,6 @@ def _is_aggregation_only_rule(rule: WorkflowRule) -> bool:
     return rule.condition_type.startswith("aggregation_")
 
 
-def _match_alc_signal(
-    rule: WorkflowRule,
-    extraction: ExtractionPayload,
-    context: RoutingContext,
-) -> tuple[bool, list[str]]:
-    reasons: list[str] = []
-    unit_codes = _optional_upper_string_set(rule, "business_unit_codes")
-    if extraction.business_signals.business_unit_code:
-        actual_unit = extraction.business_signals.business_unit_code.strip().upper()
-        if actual_unit in unit_codes:
-            reasons.append(f"business_unit_code {actual_unit} matched")
-
-    property_match = context.property_evaluation.property_match
-
-    suppress_text_only = _has_stronger_non_exempt_address_signal(rule, extraction, context)
-    evidence = " ".join(_alc_text_evidence(extraction, property_match))
-    if not suppress_text_only:
-        phrase_patterns = _optional_string_list_condition(rule, "text_phrases")
-        for phrase in phrase_patterns:
-            if phrase.lower() in evidence.lower():
-                reasons.append(f"text phrase {phrase} matched")
-                break
-
-        standalone_terms = _optional_string_list_condition(rule, "standalone_terms")
-        for term in standalone_terms:
-            if re.search(rf"(?<![A-Za-z0-9]){re.escape(term)}(?![A-Za-z0-9])", evidence, flags=re.IGNORECASE):
-                reasons.append(f"standalone term {term} matched")
-                break
-
-    return bool(reasons), reasons
-
-
-def _has_stronger_non_exempt_address_signal(rule: WorkflowRule, extraction: ExtractionPayload, context: RoutingContext) -> bool:
-    if context.property_evaluation.property_match is None:
-        return False
-
-    exempt_phrases = [
-        _normalize_address_phrase(phrase)
-        for phrase in _optional_string_list_condition(rule, "text_signal_exempt_property_addresses")
-    ]
-    if not exempt_phrases:
-        return False
-
-    strong_labels = {"property", "site", "service_location", "ship_to", "deliver_to"}
-    for candidate in extraction.property_lookup.address_candidates:
-        if candidate.label.strip().lower() not in strong_labels:
-            continue
-        normalized = _normalize_address_phrase(" ".join(value for value in (candidate.street, candidate.normalized_address) if value))
-        if not normalized:
-            continue
-        if normalized and not any(phrase in normalized for phrase in exempt_phrases):
-            return True
-    return False
-
-
 def _normalize_address_phrase(value: str) -> str:
     normalized = value.strip().lower()
     replacements = {
@@ -722,60 +683,6 @@ def _normalize_address_phrase(value: str) -> str:
     for pattern, replacement in replacements.items():
         normalized = re.sub(pattern, replacement, normalized)
     return re.sub(r"[^a-z0-9]+", " ", normalized).strip()
-
-
-def _alc_text_evidence(extraction: ExtractionPayload, property_match: PropertyMatch | None) -> list[str]:
-    invoice = extraction.invoice
-    property_lookup = extraction.property_lookup
-    values: list[str] = [
-        extraction.email.subject,
-        extraction.evidence.summary,
-        invoice.vendor_name,
-        invoice.bill_to,
-        invoice.bill_to_name_line_1,
-        invoice.bill_to_name_line_2,
-        invoice.bill_to_street_address,
-        invoice.bill_to_suite,
-        invoice.bill_to_city,
-        invoice.bill_to_state,
-        invoice.bill_to_zip_code,
-        invoice.property_code,
-        invoice.property_name,
-        invoice.service_address,
-        property_match.asset_alias if property_match else None,
-        property_match.asset_name if property_match else None,
-        property_match.ownership if property_match else None,
-        property_match.market_name if property_match else None,
-        property_match.market_area if property_match else None,
-        property_match.matched_alias if property_match else None,
-    ]
-    values.extend(property_lookup.property_code)
-    values.extend(property_lookup.property_name)
-    values.extend(property_lookup.tenant)
-    values.extend(property_lookup.address)
-    values.extend(property_lookup.suite)
-    values.extend(property_lookup.city)
-    values.extend(property_lookup.state)
-    values.extend(property_lookup.zipcode)
-    values.extend(extraction.business_signals.possible_property_aliases)
-    values.extend(extraction.evidence.source_attachments)
-    for candidate in property_lookup.address_candidates:
-        values.extend(
-            [
-                candidate.street,
-                candidate.city,
-                candidate.state,
-                candidate.zipcode,
-                candidate.normalized_address,
-                candidate.source,
-                candidate.evidence_text,
-            ]
-        )
-    return [value for value in values if value]
-
-
-def _optional_upper_string_set(rule: WorkflowRule, key: str) -> set[str]:
-    return {value.upper() for value in _optional_string_list_condition(rule, key)}
 
 
 def _optional_lower_string_set(rule: WorkflowRule, key: str) -> set[str]:

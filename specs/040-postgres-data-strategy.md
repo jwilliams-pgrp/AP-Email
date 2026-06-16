@@ -68,7 +68,7 @@ Reference data supports matching:
 - ownership classification
 - vendors
 - bill-to aliases
-- business units such as ALC and Multifamily
+- business units such as Multifamily or Properties
 
 Seeded asset data includes business fields used for routing (`asset_alias`, `asset_name`, `ownership`, `asset_type`, tenant/address signals, and ownership-derived destinations).
 

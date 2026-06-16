@@ -375,25 +375,25 @@ class DecisionEngineGoldenScenarioTests(unittest.TestCase):
         self.assertEqual(decision.outcome, "ESCALATE")
         self.assertEqual(decision.destination_code, "ESCALATE_UNMATCHED_BUILDING")
 
-    def test_alc_invoice_routes_to_alc_escalation(self) -> None:
+    def test_alc_invoice_has_no_special_escalation_rule(self) -> None:
         decision = self._decide(business_unit_code="ALC", property_code=None, bill_to="Alliance Landscape Company")
 
         self.assertEqual(decision.outcome, "ESCALATE")
-        self.assertEqual(decision.destination_code, "ESCALATE_ALC")
-        self.assertEqual(decision.matched_rule_code, "alc_escalation")
+        self.assertEqual(decision.destination_code, "ESCALATE_UNMATCHED_BUILDING")
+        self.assertEqual(decision.matched_rule_code, "hard_unmatched_building")
 
-    def test_multifamily_invoice_does_not_route_to_alc_escalation(self) -> None:
+    def test_multifamily_invoice_can_still_route_to_multifamily_asset_rule(self) -> None:
         decision = self._decide(business_unit_code="MF", property_code=None, bill_to="Multifamily")
 
-        self.assertEqual(decision.outcome, "ESCALATE")
-        self.assertNotEqual(decision.matched_rule_code, "alc_escalation")
-        self.assertNotEqual(decision.destination_code, "ESCALATE_ALC")
+        self.assertEqual(decision.outcome, "AUTO")
+        self.assertEqual(decision.destination_code, "MEDIUS_MF")
+        self.assertEqual(decision.matched_rule_code, "asset_type_multifamily")
 
     def test_multifamily_asset_type_routes_to_property_destination(self) -> None:
         decision = self._decide(property_code="MF1", business_unit_code=None, bill_to="Garden Property")
 
-        self.assertEqual(decision.outcome, "ESCALATE")
-        self.assertEqual(decision.destination_code, "ESCALATE_MULTIFAMILY")
+        self.assertEqual(decision.outcome, "AUTO")
+        self.assertEqual(decision.destination_code, "MEDIUS_MF")
         self.assertEqual(decision.matched_rule_code, "asset_type_multifamily")
 
     def test_multi_invoice_pdf_routes_to_ESCALATE(self) -> None:
@@ -528,6 +528,25 @@ class DecisionEngineGoldenScenarioTests(unittest.TestCase):
         self.assertEqual(decision.outcome, "ESCALATE")
         self.assertEqual(decision.matched_rule_code, "hard_contract_or_pay_app")
         self.assertEqual(decision.destination_code, "ESCALATE_CONTRACT_PAY_APP")
+
+    def test_contractor_timesheet_without_invoice_routes_to_dedicated_escalation(self) -> None:
+        repository = InMemoryPolicyRepository()
+        extraction = validate_extraction(_payload(document_type="unknown"))
+        extraction = replace(
+            extraction,
+            document=replace(
+                extraction.document,
+                document_flags=(*extraction.document.document_flags, "contractor_timesheet_no_invoice"),
+            ),
+        )
+        decision = DecisionEngine(repository, property_match_reviewer=FakePropertyMatchReviewer()).decide(
+            extraction,
+            "idempotency-key",
+        ).decision
+
+        self.assertEqual(decision.outcome, "ESCALATE")
+        self.assertEqual(decision.matched_rule_code, "hard_contractor_timesheet_no_invoice")
+        self.assertEqual(decision.destination_code, "ESCALATE_CONTRACTOR_TIMESHEET")
 
     def test_image_attachment_routes_to_wrong_file_type_escalate(self) -> None:
         decision = self._decide(source_attachments=["invoice.jpg"])
@@ -668,7 +687,7 @@ class DecisionEngineGoldenScenarioTests(unittest.TestCase):
         self.assertEqual(decision.matched_rule_code, "property_routing_match")
         self.assertEqual(decision.destination_code, "MEDIUS_PROPERTIES")
 
-    def test_explicit_due_date_before_received_date_routes_to_past_due_escalate_label(self) -> None:
+    def test_explicit_due_date_before_received_date_without_email_past_due_language_routes_normally(self) -> None:
         decision = self._decide(
             document_type="invoice",
             property_code="HW1",
@@ -678,9 +697,9 @@ class DecisionEngineGoldenScenarioTests(unittest.TestCase):
             evidence_summary="Invoice shows explicit Due Date: 2026-05-10 and payment due balance.",
         )
 
-        self.assertEqual(decision.outcome, "ESCALATE")
-        self.assertEqual(decision.matched_rule_code, "hard_past_due_notice")
-        self.assertEqual(decision.destination_code, "ESCALATE_PAST_DUE")
+        self.assertEqual(decision.outcome, "AUTO")
+        self.assertEqual(decision.matched_rule_code, "property_routing_match")
+        self.assertEqual(decision.destination_code, "MEDIUS_PROPERTIES")
 
     def test_krcl_payable_upon_receipt_pattern_does_not_escalate_past_due(self) -> None:
         decision = self._decide(
@@ -730,6 +749,44 @@ class DecisionEngineGoldenScenarioTests(unittest.TestCase):
         self.assertNotEqual(decision.matched_rule_code, "hard_past_due_notice")
         self.assertNotEqual(decision.destination_code, "ESCALATE_PAST_DUE")
 
+    def test_zero_dollar_properties_invoice_escalates_zero_dollar_invoice(self) -> None:
+        decision = self._decide(amount=0)
+
+        self.assertEqual(decision.outcome, "ESCALATE")
+        self.assertEqual(decision.destination_code, "ESCALATE_0_DOLLAR_INVOICE")
+        self.assertEqual(decision.matched_rule_code, "amount_zero_invoice")
+        self.assertEqual(decision.routing_match["normal_destination_code"], "MEDIUS_PROPERTIES")
+
+    def test_zero_dollar_external_pm_invoice_escalates_zero_dollar_invoice(self) -> None:
+        decision = self._decide(property_code="EXT1", amount=0)
+
+        self.assertEqual(decision.outcome, "ESCALATE")
+        self.assertEqual(decision.destination_code, "ESCALATE_0_DOLLAR_INVOICE")
+        self.assertEqual(decision.matched_rule_code, "amount_zero_invoice")
+        self.assertEqual(decision.routing_match["normal_destination_code"], "TIFFANY_BECK")
+
+    def test_zero_dollar_multifamily_invoice_escalates_before_multifamily_auto_route(self) -> None:
+        decision = self._decide(property_code="MF1", business_unit_code=None, bill_to="Garden Property", amount=0)
+
+        self.assertEqual(decision.outcome, "ESCALATE")
+        self.assertEqual(decision.destination_code, "ESCALATE_0_DOLLAR_INVOICE")
+        self.assertEqual(decision.matched_rule_code, "amount_zero_invoice")
+        self.assertEqual(decision.routing_match["normal_destination_code"], "MEDIUS_MF")
+
+    def test_zero_dollar_invoice_without_normal_destination_uses_unmatched_building(self) -> None:
+        decision = self._decide(property_code=None, business_unit_code=None, bill_to="Alliance Landscape Company", amount=0)
+
+        self.assertEqual(decision.outcome, "ESCALATE")
+        self.assertEqual(decision.destination_code, "ESCALATE_UNMATCHED_BUILDING")
+        self.assertEqual(decision.matched_rule_code, "hard_unmatched_building")
+
+    def test_zero_dollar_invoice_hard_exception_still_wins(self) -> None:
+        decision = self._decide(amount=0, link_only=True, has_invoice_attachment=False, source_attachments=[])
+
+        self.assertEqual(decision.outcome, "ESCALATE")
+        self.assertEqual(decision.destination_code, "ESCALATE_LINK_ONLY")
+        self.assertEqual(decision.matched_rule_code, "hard_link_only_invoice")
+
     def test_high_dollar_properties_invoice_with_project_number_routes_to_medius_properties(self) -> None:
         decision = self._decide(amount=15000, project_number="PRJ-100")
 
@@ -760,27 +817,28 @@ class DecisionEngineGoldenScenarioTests(unittest.TestCase):
         self.assertEqual(decision.matched_rule_code, "amount_over_threshold")
         self.assertEqual(decision.routing_match["normal_destination_code"], "TIFFANY_BECK")
 
-    def test_high_dollar_alc_invoice_escalates_to_alc(self) -> None:
+    def test_high_dollar_alc_invoice_without_property_uses_unmatched_building(self) -> None:
         decision = self._decide(business_unit_code="ALC", property_code=None, bill_to="Alliance Landscape Company", amount=15000)
 
         self.assertEqual(decision.outcome, "ESCALATE")
-        self.assertEqual(decision.destination_code, "ESCALATE_ALC")
-        self.assertEqual(decision.matched_rule_code, "alc_escalation")
+        self.assertEqual(decision.destination_code, "ESCALATE_UNMATCHED_BUILDING")
+        self.assertEqual(decision.matched_rule_code, "hard_unmatched_building")
 
-    def test_high_dollar_multifamily_invoice_routes_to_multifamily_escalation(self) -> None:
+    def test_high_dollar_multifamily_invoice_routes_to_medius_mf(self) -> None:
         decision = self._decide(property_code="MF1", business_unit_code=None, bill_to="Garden Property", amount=15000)
 
-        self.assertEqual(decision.outcome, "ESCALATE")
-        self.assertEqual(decision.destination_code, "ESCALATE_MULTIFAMILY")
+        self.assertEqual(decision.outcome, "AUTO")
+        self.assertEqual(decision.destination_code, "MEDIUS_MF")
         self.assertEqual(decision.matched_rule_code, "asset_type_multifamily")
 
-    def test_alliance_landscape_text_evidence_escalates_to_alc(self) -> None:
+    def test_alliance_landscape_text_evidence_has_no_special_route(self) -> None:
         decision = self._decide(property_code=None, business_unit_code=None, bill_to="Alliance Landscape Company")
 
         self.assertEqual(decision.outcome, "ESCALATE")
-        self.assertEqual(decision.destination_code, "ESCALATE_ALC")
+        self.assertEqual(decision.destination_code, "ESCALATE_UNMATCHED_BUILDING")
+        self.assertEqual(decision.matched_rule_code, "hard_unmatched_building")
 
-    def test_alliance_landscaping_text_evidence_overrides_property_address_route(self) -> None:
+    def test_alliance_landscaping_text_evidence_routes_by_property_address(self) -> None:
         decision = self._decide(
             property_code=None,
             business_unit_code=None,
@@ -818,11 +876,11 @@ class DecisionEngineGoldenScenarioTests(unittest.TestCase):
             possible_property_aliases=["alliance landscaping"],
         )
 
-        self.assertEqual(decision.outcome, "ESCALATE")
-        self.assertEqual(decision.destination_code, "ESCALATE_ALC")
-        self.assertEqual(decision.matched_rule_code, "alc_escalation")
+        self.assertEqual(decision.outcome, "AUTO")
+        self.assertEqual(decision.destination_code, "MEDIUS_PROPERTIES")
+        self.assertEqual(decision.matched_rule_code, "property_routing_match")
 
-    def test_alliance_landscaping_with_bill_to_9800_only_escalates_to_alc(self) -> None:
+    def test_alliance_landscaping_with_bill_to_9800_only_routes_by_property_address(self) -> None:
         decision = self._decide(
             property_code=None,
             property_name=None,
@@ -862,9 +920,9 @@ class DecisionEngineGoldenScenarioTests(unittest.TestCase):
             possible_property_aliases=["alliance landscaping"],
         )
 
-        self.assertEqual(decision.outcome, "ESCALATE")
-        self.assertEqual(decision.destination_code, "ESCALATE_ALC")
-        self.assertEqual(decision.matched_rule_code, "alc_escalation")
+        self.assertEqual(decision.outcome, "AUTO")
+        self.assertEqual(decision.destination_code, "MEDIUS_PROPERTIES")
+        self.assertEqual(decision.matched_rule_code, "property_routing_match")
 
     def test_alliance_landscaping_with_non_9800_property_address_routes_to_property_destination(self) -> None:
         decision = self._decide(
@@ -959,23 +1017,21 @@ class DecisionEngineGoldenScenarioTests(unittest.TestCase):
         self.assertEqual(decision.matched_rule_code, "property_routing_match")
         self.assertEqual(decision.routing_match["property_match"]["property_code"], "GW9")
 
-    def test_standalone_alc_text_evidence_escalates_to_alc(self) -> None:
+    def test_standalone_alc_text_evidence_has_no_special_route(self) -> None:
         decision = self._decide(property_code=None, business_unit_code=None, bill_to="ALC")
 
         self.assertEqual(decision.outcome, "ESCALATE")
-        self.assertEqual(decision.destination_code, "ESCALATE_ALC")
+        self.assertEqual(decision.destination_code, "ESCALATE_UNMATCHED_BUILDING")
 
-    def test_multifamily_text_evidence_does_not_route_to_alc_escalation(self) -> None:
+    def test_multifamily_text_evidence_uses_fallback_without_property_signal(self) -> None:
         decision = self._decide(property_code=None, business_unit_code=None, evidence_summary="Invoice for Multifamily property service.")
 
         self.assertEqual(decision.outcome, "ESCALATE")
         self.assertEqual(decision.destination_code, "ESCALATE_GENERAL")
-        self.assertNotEqual(decision.matched_rule_code, "alc_escalation")
 
-    def test_non_standalone_alc_text_does_not_match_alc(self) -> None:
+    def test_non_standalone_alc_text_uses_unmatched_building(self) -> None:
         decision = self._decide(property_code=None, business_unit_code=None, bill_to="Malcolm Services")
 
-        self.assertNotEqual(decision.matched_rule_code, "alc_escalation")
         self.assertEqual(decision.destination_code, "ESCALATE_UNMATCHED_BUILDING")
 
     def test_suspected_duplicate_invoice_routes_to_ESCALATE(self) -> None:
@@ -1193,6 +1249,35 @@ class DecisionEngineGoldenScenarioTests(unittest.TestCase):
         )
 
         self.assertNotEqual(decision.matched_rule_code, "hard_current_reply_no_action")
+
+    def test_statement_reply_without_latest_no_action_fact_still_files(self) -> None:
+        payload = _payload(
+            document_type="statement",
+            sender_email="dan.landsberg@hillwood.com",
+            vendor_name="Chefs' Produce",
+            property_code=None,
+            bill_to=None,
+            business_unit_code=None,
+            has_invoice_attachment=False,
+            amount=0,
+            source_attachments=[],
+            flags=["missing_invoice_attachment", "statement_or_account_summary"],
+        )
+        extraction = validate_extraction(payload)
+
+        decision = DecisionEngine(InMemoryPolicyRepository(), property_match_reviewer=FakePropertyMatchReviewer()).decide(
+            extraction,
+            "idempotency-key",
+            decision_context=DecisionContext(
+                latest_body_text="Thank you. I just sent it.",
+                quoted_history_text="Prior AP thread about Chefs' Produce AR Statement and highlighted invoices.",
+                has_quoted_history=True,
+            ),
+        ).decision
+
+        self.assertEqual(decision.outcome, "FILE")
+        self.assertEqual(decision.destination_code, "FOLDER_STATEMENTS")
+        self.assertEqual(decision.matched_rule_code, "statement_file")
 
     def test_quoted_vendor_question_without_latest_no_action_fact_still_escalates(self) -> None:
         payload = _payload(
@@ -1582,7 +1667,6 @@ class InMemoryPolicyRepository(PolicyRepository):
         self.duplicate_status = duplicate_status
         self.destinations = {
             "MEDIUS_PROPERTIES": Destination("MEDIUS_PROPERTIES", "Medius PROP", "medius.prop@example.com", "MEDIUS_PROPERTIES", None, send_email=True),
-            "MEDIUS_ALC": Destination("MEDIUS_ALC", "Medius ALC", "medius.alc@example.com", "MEDIUS_ALC", None, send_email=True),
             "MEDIUS_MF": Destination("MEDIUS_MF", "Medius MF", "medius.mf@example.com", "MEDIUS_MF", None, send_email=True),
             "TIFFANY_BECK": Destination("TIFFANY_BECK", "Tiffany Beck", "tiffany@example.com", "TIFFANY_BECK", None, send_email=True),
             "MICHELE_FELLERS": Destination("MICHELE_FELLERS", "Michele Fellers", "michele@example.com", "MICHELE_FELLERS", None, send_email=True),
@@ -1595,15 +1679,15 @@ class InMemoryPolicyRepository(PolicyRepository):
             "ESCALATE_MULTI_PDF_MERGE": Destination("ESCALATE_MULTI_PDF_MERGE", "MULTI-PDF-MERGE", None, "ESCALATE", "Multi PDF Merge"),
             "ESCALATE_LIEN_WAIVER": Destination("ESCALATE_LIEN_WAIVER", "LIEN-WAIVER", None, "ESCALATE", "Lien Waiver"),
             "ESCALATE_LINK_ONLY": Destination("ESCALATE_LINK_ONLY", "LINK-ONLY", None, "ESCALATE", "Link Only", send_teams_message=True),
+            "ESCALATE_0_DOLLAR_INVOICE": Destination("ESCALATE_0_DOLLAR_INVOICE", "0-DOLLAR-INVOICE", None, "ESCALATE", "0 Dollar Invoice"),
             "ESCALATE_WRONG_FILE_TYPE": Destination("ESCALATE_WRONG_FILE_TYPE", "WRONG-FILE-TYPE", None, "ESCALATE", "Wrong File Type"),
             "ESCALATE_CONTRACT_PAY_APP": Destination("ESCALATE_CONTRACT_PAY_APP", "CONTRACT-PAY-APP", None, "ESCALATE", "Contract Pay App"),
+            "ESCALATE_CONTRACTOR_TIMESHEET": Destination("ESCALATE_CONTRACTOR_TIMESHEET", "CONTRACTOR-TIMESHEET", None, "ESCALATE", "Contractor Timesheet"),
             "ESCALATE_VENDOR_QUESTION": Destination("ESCALATE_VENDOR_QUESTION", "VENDOR-QUESTION", None, "ESCALATE", "Vendor Question"),
             "ESCALATE_WRONG_DESTINATION": Destination("ESCALATE_WRONG_DESTINATION", "WRONG-DESTINATION", None, "ESCALATE", "Wrong Destination"),
             "ESCALATE_PAST_DUE": Destination("ESCALATE_PAST_DUE", "PAST-DUE", None, "ESCALATE", "Past Due", send_teams_message=True),
             "ESCALATE_DUPLICATE_SUSPECTED": Destination("ESCALATE_DUPLICATE_SUSPECTED", "DUPLICATE-SUSPECTED", None, "ESCALATE", "Duplicate Suspected"),
-            "ESCALATE_ALC": Destination("ESCALATE_ALC", "ALC", None, "ESCALATE", "ALC"),
             "ESCALATE_SPLIT_MULTI_PDF": Destination("ESCALATE_SPLIT_MULTI_PDF", "SPLIT-MULTI-PDF", None, "ESCALATE", "SPLIT-MULTI-PDF"),
-            "ESCALATE_MULTIFAMILY": Destination("ESCALATE_MULTIFAMILY", "MULTIFAMILY", None, "ESCALATE", "MULTIFAMILY"),
             "ESCALATE_UNMATCHED_BUILDING": Destination("ESCALATE_UNMATCHED_BUILDING", "UNMATCHED-BUILDING", None, "ESCALATE", "Unmatched Building"),
             "ESCALATE_CHECK_REQUEST": Destination("ESCALATE_CHECK_REQUEST", "CHECK-REQUEST", None, "ESCALATE", "Check Request"),
             "ESCALATE_GENERAL": Destination("ESCALATE_GENERAL", "Escalate General", None, "ESCALATE", "General"),
@@ -1870,6 +1954,7 @@ def _rules() -> list[WorkflowRule]:
         _rule("hard_pdf_required_unreadable", 117, "pre_decision_fact", "ESCALATE", "ESCALATE_GENERAL", {"fact_key": "pdf_required_but_unreadable", "expected": True}),
         _rule("hard_pdf_text_low_quality", 118, "pre_decision_fact", "ESCALATE", "ESCALATE_GENERAL", {"fact_key": "pdf_text_low_quality", "expected": True}),
         _rule("hard_link_only_invoice", 120, "document_flag", "ESCALATE", "ESCALATE_LINK_ONLY", {"flag": "link_only_invoice"}),
+        _rule("hard_contractor_timesheet_no_invoice", 125, "document_flag", "ESCALATE", "ESCALATE_CONTRACTOR_TIMESHEET", {"flag": "contractor_timesheet_no_invoice"}),
         _rule("hard_contract_or_pay_app", 130, "document_type", "ESCALATE", "ESCALATE_CONTRACT_PAY_APP", {"document_types": ["contract", "pay_application"]}),
         _rule("hard_vendor_inquiry", 140, "document_flag", "ESCALATE", "ESCALATE_VENDOR_QUESTION", {"flag": "vendor_inquiry"}),
         _rule("hard_wrong_destination", 142, "document_flag", "ESCALATE", "ESCALATE_WRONG_DESTINATION", {"flag": "wrong_destination"}),
@@ -1885,19 +1970,6 @@ def _rules() -> list[WorkflowRule]:
             {"document_types": ["check_request"], "allowed_destination_codes": ["MEDIUS_PROPERTIES"]},
         ),
         _rule("hard_check_request", 260, "document_type", "ESCALATE", "ESCALATE_CHECK_REQUEST", {"document_types": ["check_request"]}),
-        _rule(
-            "alc_escalation",
-            300,
-            "alc_signal",
-            "ESCALATE",
-            "ESCALATE_ALC",
-            {
-                "business_unit_codes": ["ALC"],
-                "text_phrases": ["Alliance Landscape", "Alliance Landscaping"],
-                "standalone_terms": ["ALC"],
-                "text_signal_exempt_property_addresses": ["9800 Hillwood Pkwy"],
-            },
-        ),
         _rule(
             "informational_property_notice",
             350,
@@ -1916,7 +1988,8 @@ def _rules() -> list[WorkflowRule]:
                 ],
             },
         ),
-        _rule("asset_type_multifamily", 375, "property_asset_type", "ESCALATE", "ESCALATE_MULTIFAMILY", {"asset_type": "Multifamily", "document_types": ["invoice"]}),
+        _rule("amount_zero_invoice", 360, "amount_equals_zero", "ESCALATE", "ESCALATE_0_DOLLAR_INVOICE", {"document_types": ["invoice"]}),
+        _rule("asset_type_multifamily", 375, "property_asset_type", "AUTO", "MEDIUS_MF", {"asset_type": "Multifamily", "document_types": ["invoice"]}),
         _rule(
             "amount_over_threshold",
             400,

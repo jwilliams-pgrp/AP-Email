@@ -255,6 +255,71 @@ def test_monitor_escalate_emails_reads_reloaded_mirror_without_status_filter(mon
     assert "where rq.status" not in connection.sql.lower()
 
 
+def test_email_search_uses_sender_name_invoice_number_and_received_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    rows = [
+        {
+            "email_id": "email-1",
+            "subject": "Invoice",
+            "sender_email": "ap@example.com",
+            "received_at": "2026-06-05T15:00:00Z",
+            "invoice_number": "INV-1042",
+        }
+    ]
+    connection = _FakeDashboardConnection({"from emails e": rows})
+    monkeypatch.setattr(service, "connect", lambda: connection)
+
+    result = service.email_search("INV-1042")
+
+    assert result == rows
+    sql = connection.sql.lower()
+    assert "e.metadata ->> 'sender_name'" in sql
+    assert "e.source_message_id" in sql
+    assert "e.idempotency_key" in sql
+    assert "d.destination_code" in sql
+    assert "d.matched_rule_code" in sql
+    assert "d.extracted_fields::text" in sql
+    assert "from invoices i2" in sql
+    assert "i.vendor_name" in sql
+    assert "i.invoice_number" in sql
+    assert "x.parsed_output::text" in sql
+    assert "order by e.received_at desc nulls last, e.created_at desc nulls last" in sql
+    assert connection.params[0] == "%inv-1042%"
+
+
+def test_monitor_recent_runs_filters_dates_and_searches_email_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    rows = [
+        {
+            "run_id": "run-1",
+            "email_id": "email-1",
+            "status": "completed",
+            "started_at": "2026-06-05T15:00:00Z",
+            "completed_at": "2026-06-05T15:00:10Z",
+            "final_outcome": "AUTO",
+            "destination_code": "ESCALATE_VENDOR_QUESTION",
+            "subject": "Invoice",
+            "sender_email": "ap@example.com",
+            "reason": "Matched route",
+        }
+    ]
+    connection = _FakeDashboardConnection({"from audit_runs ar": rows})
+    monkeypatch.setattr(service, "connect", lambda: connection)
+
+    result = service.monitor_recent_runs(20, "2026-05-25", "2026-06-08", "Vendor")
+
+    assert result == rows
+    sql = connection.sql.lower()
+    assert "ar.started_at >= %s and ar.started_at < %s" in sql
+    assert "d.destination_code" in sql
+    assert "e.metadata ->> 'sender_name'" in sql
+    assert "from invoices i2" in sql
+    assert "i.invoice_number" in sql
+    assert "x.parsed_output::text" in sql
+    assert "order by ar.started_at desc, e.received_at desc nulls last, e.created_at desc nulls last" in sql
+    assert connection.params[0].isoformat() == "2026-05-25T00:00:00+00:00"
+    assert connection.params[1].isoformat() == "2026-06-09T00:00:00+00:00"
+    assert connection.params[-1] == 20
+
+
 class _FakeDashboardConnection:
     def __init__(self, rows_by_pattern: dict[str, list[dict]]) -> None:
         self.rows_by_pattern = rows_by_pattern

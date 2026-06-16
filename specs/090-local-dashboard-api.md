@@ -85,7 +85,10 @@ Monitor endpoints must return data shaped for business monitoring:
 - confidence buckets
 - ESCALATE emails from `escalate_queue`, which mirrors the current Graph `ESCALATE` folder contents after each mailbox sync
 - recent runs with email subject, sender, outcome, reason, status, and timestamps
+- recent runs must include decision destination code so the UI can display the routing destination instead of only the high-level outcome
 - recent runs must return one row per `audit_runs` row even when batch processing created multiple item-level decisions
+- monitor metric endpoints must accept `start_date` and `end_date` query parameters, with the end date included through the full selected calendar day
+- recent runs must support the same free-text search fields as email search and be ordered by audit run start time descending
 
 Metric queries must handle empty databases by returning zero values and empty arrays, not synthetic demo rows.
 
@@ -141,6 +144,8 @@ Search should include extracted fields stored in JSONB when practical:
 - amount
 - document type
 
+Free-text search must include email subject, sender email, sender display/name metadata, source message id, idempotency key, destination code, matched rule code, decision reason, extracted invoice fields, invoice number, and supported email metadata. Search results must be ordered by `emails.received_at` descending, with `emails.created_at` as the tie-breaker.
+
 Search result rows must include enough data for the UI to help a user choose the correct email before opening details.
 
 Search requests from the UI should be safe for debounced auto-search. Empty queries may return the newest limited records; non-empty queries must apply the provided text filters without requiring a separate submit action.
@@ -171,6 +176,7 @@ Tests must cover:
 - Monitor endpoints return real Postgres-derived metrics.
 - Recent processing runs show one row per processing run execution.
 - Email search can find records by metadata and extracted fields.
+- Monitor recent runs search can find records using the same email metadata and extracted invoice fields as email search.
 - Detail endpoints return all data needed by the detail page without frontend SQL knowledge.
 - Artifact endpoints serve only approved local artifact paths linked to database records.
 - In Azure, artifact endpoints serve only approved Blob artifacts linked to database records.

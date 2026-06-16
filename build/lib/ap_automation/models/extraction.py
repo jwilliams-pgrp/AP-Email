@@ -26,6 +26,7 @@ DOCUMENT_TYPES = {
 DOCUMENT_FLAGS = {
     "multi_invoice_pdf",
     "separate_lien_waiver",
+    "contractor_timesheet_no_invoice",
     "link_only_invoice",
     "missing_invoice_attachment",
     "contract_or_pay_application",
@@ -52,6 +53,26 @@ ADDRESS_CANDIDATE_LABELS = {
 
 EXCLUDED_ATTACHMENT_REASON_CODES = {"irrelevant_to_ap_workflow", "payment_instruction_support"}
 EXCLUDED_ATTACHMENT_SOURCES = {"document_intelligence", "pymupdf", "filename", "email_context"}
+TRIAGE_EXTRACTION_ROUTES = {
+    "invoice_detail",
+    "statement_detail",
+    "exception_detail",
+    "notice_detail",
+    "email_only_detail",
+    "no_detail",
+}
+TRIAGE_RISK_FLAGS = {
+    "multi_invoice",
+    "separate_supporting_document",
+    "link_only",
+    "contract_or_pay_application",
+    "vendor_question_or_payment_inquiry",
+    "wrong_destination",
+    "past_due",
+    "unsupported_attachment",
+    "low_text_quality",
+    "conflicting_signals",
+}
 
 
 @dataclass(frozen=True)
@@ -321,6 +342,29 @@ class ExtractionBatch:
     raw: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class TriageItem:
+    item_kind: Literal["attachment", "email"]
+    item_key: str
+    display_name: str | None
+    source_attachments: tuple[str, ...]
+    document_type: str
+    requires_detail_extraction: bool
+    extraction_route: str
+    risk_flags: tuple[str, ...]
+    confidence: float
+    reason: str
+    raw_item: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ExtractionTriageBatch:
+    schema_version: Literal["extraction_triage_batch.v1"]
+    items: tuple[TriageItem, ...]
+    excluded_attachments: tuple[ExcludedAttachment, ...]
+    raw: dict[str, Any]
+
+
 def validate_extraction(payload: dict[str, Any]) -> ExtractionPayload:
     errors: list[str] = []
 
@@ -446,7 +490,7 @@ def validate_extraction(payload: dict[str, Any]) -> ExtractionPayload:
         has_conflicting_signals=_required_bool(observed_raw, "has_conflicting_signals", "observed_facts.has_conflicting_signals", errors),
         has_low_text_quality=_required_bool(observed_raw, "has_low_text_quality", "observed_facts.has_low_text_quality", errors),
     )
-    flags = _derive_document_flags(document_type, link_only, multi_invoice, email_raw, document_raw, invoice_raw, observed_facts, evidence_raw)
+    flags = _derive_document_flags(document_type, link_only, multi_invoice, document_raw, invoice_raw, observed_facts, evidence_raw)
     requires_merge = observed_facts.mentions_merge_or_combine_required
 
     confidence = ConfidenceSignals(
@@ -620,17 +664,117 @@ def validate_extraction_batch(payload: dict[str, Any]) -> ExtractionBatch:
     )
 
 
+def validate_extraction_triage_batch(payload: dict[str, Any]) -> ExtractionTriageBatch:
+    errors: list[str] = []
+    if payload.get("schema_version") != "extraction_triage_batch.v1":
+        errors.append("schema_version must be extraction_triage_batch.v1")
+
+    raw_items = payload.get("items")
+    if not isinstance(raw_items, list) or not raw_items:
+        errors.append("extraction_triage_batch.v1 items must be a non-empty list")
+        raw_items = []
+
+    excluded_attachments = _excluded_attachments(payload.get("excluded_attachments"), errors)
+    excluded_names = {attachment.file_name for attachment in excluded_attachments}
+    items: list[TriageItem] = []
+    seen_keys: set[str] = set()
+    for index, raw_item in enumerate(raw_items):
+        path = f"items[{index}]"
+        if not isinstance(raw_item, dict):
+            errors.append(f"{path} must be an object")
+            continue
+
+        item_kind = raw_item.get("item_kind")
+        if item_kind not in {"attachment", "email"}:
+            errors.append(f"{path}.item_kind must be attachment or email")
+            item_kind = "email"
+
+        item_key = raw_item.get("item_key")
+        if not isinstance(item_key, str) or not item_key.strip():
+            errors.append(f"{path}.item_key must be a non-empty string")
+            item_key = f"invalid:{index}"
+        else:
+            item_key = item_key.strip()
+            if item_key in seen_keys:
+                errors.append(f"{path}.item_key must be unique within the triage batch")
+            seen_keys.add(item_key)
+
+        display_name = _optional_str_for_errors(raw_item.get("display_name"), f"{path}.display_name", errors)
+        source_attachments = _triage_source_attachments(raw_item.get("source_attachments"), path, errors)
+        for name in source_attachments:
+            if name in excluded_names:
+                errors.append(f"{path}.source_attachments must not cite excluded attachment {name}")
+
+        document_type = _optional_str_for_errors(raw_item.get("document_type"), f"{path}.document_type", errors)
+        if document_type is None or document_type not in DOCUMENT_TYPES:
+            errors.append(f"{path}.document_type must be one of {sorted(DOCUMENT_TYPES)}")
+            document_type = "unknown"
+
+        requires_detail_extraction = raw_item.get("requires_detail_extraction")
+        if not isinstance(requires_detail_extraction, bool):
+            errors.append(_type_error(f"{path}.requires_detail_extraction", "boolean", requires_detail_extraction))
+            requires_detail_extraction = True
+
+        extraction_route = _optional_str_for_errors(raw_item.get("extraction_route"), f"{path}.extraction_route", errors)
+        if extraction_route is None or extraction_route not in TRIAGE_EXTRACTION_ROUTES:
+            errors.append(f"{path}.extraction_route must be one of {sorted(TRIAGE_EXTRACTION_ROUTES)}")
+            extraction_route = "exception_detail"
+
+        risk_flags = _triage_risk_flags(raw_item.get("risk_flags"), path, errors)
+        confidence = _triage_confidence(raw_item.get("confidence"), path, errors)
+        reason = _optional_str_for_errors(raw_item.get("reason"), f"{path}.reason", errors)
+        if reason is None:
+            errors.append(f"{path}.reason must be a non-empty string")
+            reason = ""
+
+        if extraction_route == "no_detail" and requires_detail_extraction:
+            errors.append(f"{path}.requires_detail_extraction must be false when extraction_route is no_detail")
+
+        items.append(
+            TriageItem(
+                item_kind=item_kind,  # type: ignore[arg-type]
+                item_key=item_key,
+                display_name=display_name,
+                source_attachments=tuple(source_attachments),
+                document_type=document_type,
+                requires_detail_extraction=requires_detail_extraction,
+                extraction_route=extraction_route,
+                risk_flags=tuple(risk_flags),
+                confidence=confidence,
+                reason=reason,
+                raw_item=raw_item,
+            )
+        )
+
+    if errors:
+        raise ExtractionValidationError(errors)
+    return ExtractionTriageBatch(
+        schema_version="extraction_triage_batch.v1",
+        items=tuple(items),
+        excluded_attachments=tuple(excluded_attachments),
+        raw=payload,
+    )
+
+
 def _normalize_separate_supporting_document_flags(items: list[DocumentItem]) -> list[DocumentItem]:
     supporting_items = [item for item in items if _is_ap_relevant_supporting_document(item)]
-    if not supporting_items:
-        return [_set_separate_backup_signal(item, False) for item in items]
-    return [
+    has_invoice_item = any(item.extraction.document.document_type == "invoice" for item in items)
+    normalized_items = [
         _set_separate_backup_signal(
             item,
+            bool(supporting_items)
+            and
             item.extraction.document.document_type == "invoice"
             and any(_supporting_document_matches_invoice(item, supporting_item) for supporting_item in supporting_items),
         )
         for item in items
+    ]
+    return [
+        _set_contractor_timesheet_no_invoice_signal(
+            item,
+            not has_invoice_item and _is_contractor_timesheet_document(item),
+        )
+        for item in normalized_items
     ]
 
 
@@ -679,6 +823,38 @@ def _is_ap_relevant_supporting_document(item: DocumentItem) -> bool:
         if value
     ).lower()
     return any(keyword in text for keyword in _SUPPORTING_DOCUMENT_KEYWORDS)
+
+
+_CONTRACTOR_TIMESHEET_KEYWORDS = (
+    "timesheet",
+    "time sheet",
+    "time entry",
+    "time-entry",
+    "hourly detail",
+    "shift report",
+    "actual hours worked",
+    "hours worked",
+    "staffing hours",
+)
+
+
+def _is_contractor_timesheet_document(item: DocumentItem) -> bool:
+    extraction = item.extraction
+    if extraction.document.document_type == "invoice":
+        return False
+    text = " ".join(
+        value
+        for value in (
+            item.display_name,
+            extraction.evidence.summary,
+            extraction.invoice.invoice_number,
+            extraction.invoice.vendor_name,
+            extraction.invoice.property_name,
+            extraction.invoice.service_address,
+        )
+        if value
+    ).lower()
+    return any(keyword in text for keyword in _CONTRACTOR_TIMESHEET_KEYWORDS)
 
 
 def _supporting_document_matches_invoice(invoice_item: DocumentItem, supporting_item: DocumentItem) -> bool:
@@ -735,6 +911,15 @@ def _set_separate_backup_signal(item: DocumentItem, enabled: bool) -> DocumentIt
     return replace(item, extraction=replace(extraction, observed_facts=observed, document=document, raw=raw))
 
 
+def _set_contractor_timesheet_no_invoice_signal(item: DocumentItem, enabled: bool) -> DocumentItem:
+    extraction = item.extraction
+    flags = [flag for flag in extraction.document.document_flags if flag != "contractor_timesheet_no_invoice"]
+    if enabled:
+        flags.append("contractor_timesheet_no_invoice")
+    document = replace(extraction.document, document_flags=tuple(flags))
+    return replace(item, extraction=replace(extraction, document=document))
+
+
 def _raw_with_separate_backup_signal(raw: dict[str, Any], enabled: bool) -> dict[str, Any]:
     updated = dict(raw)
     observed = dict(updated.get("observed_facts") or {})
@@ -787,6 +972,39 @@ def _excluded_attachments(value: Any, errors: list[str]) -> list[ExcludedAttachm
             )
         )
     return excluded
+
+
+def _triage_source_attachments(value: Any, path: str, errors: list[str]) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        errors.append(_type_error(f"{path}.source_attachments", "list of strings", value))
+        return []
+    return _dedupe_preserving_order(item for item in value if item.strip())
+
+
+def _triage_risk_flags(value: Any, path: str, errors: list[str]) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        errors.append(_type_error(f"{path}.risk_flags", "list of strings", value))
+        return []
+    flags = _dedupe_preserving_order(item for item in value if item.strip())
+    invalid = [flag for flag in flags if flag not in TRIAGE_RISK_FLAGS]
+    if invalid:
+        errors.append(f"{path}.risk_flags must contain only {sorted(TRIAGE_RISK_FLAGS)}; invalid values: {invalid}")
+    return [flag for flag in flags if flag in TRIAGE_RISK_FLAGS]
+
+
+def _triage_confidence(value: Any, path: str, errors: list[str]) -> float:
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        errors.append(_type_error(f"{path}.confidence", "number", value))
+        return 0.0
+    result = float(value)
+    if result < 0.0 or result > 1.0:
+        errors.append(f"{path}.confidence must be between 0.0 and 1.0")
+        return 0.0
+    return result
 
 
 def _default_item_key(extraction: ExtractionPayload) -> str:
@@ -980,7 +1198,6 @@ def _derive_document_flags(
     document_type: str,
     link_only: bool,
     multi_invoice: bool,
-    email_raw: dict[str, Any],
     document_raw: dict[str, Any],
     invoice_raw: dict[str, Any],
     observed: ObservedFacts,
@@ -1035,8 +1252,7 @@ def _derive_document_flags(
     add(
         "past_due",
         (is_invoice and observed.current_invoice_is_past_due)
-        or document_type == "past_due_notice"
-        or _is_payable_invoice_past_due_by_dates(document_type, email_raw, invoice_raw, observed, evidence_raw),
+        or document_type == "past_due_notice",
     )
     add("statement_or_account_summary", observed.indicates_statement_or_account_summary or document_type in {"statement", "account_summary"})
     add("ach_or_auto_draft", observed.indicates_ach_or_auto_draft or document_type in {"ach_notice", "auto_draft_notice"})
@@ -1045,55 +1261,6 @@ def _derive_document_flags(
     add("conflicting_signals", observed.has_conflicting_signals)
     add("low_text_quality", observed.has_low_text_quality)
     return tuple(flags)
-
-
-def _is_payable_invoice_past_due_by_dates(
-    document_type: str,
-    email_raw: dict[str, Any],
-    invoice_raw: dict[str, Any],
-    observed: ObservedFacts,
-    evidence_raw: dict[str, Any],
-) -> bool:
-    if document_type != "invoice":
-        return False
-    if _is_current_bucket_aging_exception(observed, evidence_raw):
-        return False
-    try:
-        due_date = _optional_date(invoice_raw.get("due_date"))
-        amount = _optional_float(invoice_raw.get("amount"))
-        received_at = _optional_datetime(email_raw.get("received_at"))
-    except (ExtractionValidationError, ValueError):
-        return False
-    return (
-        due_date is not None
-        and received_at is not None
-        and amount is not None
-        and amount > 0
-        and received_at.date() > due_date
-        and _has_explicit_due_date_evidence(evidence_raw)
-    )
-
-
-def _has_explicit_due_date_evidence(evidence_raw: dict[str, Any]) -> bool:
-    summary = (_optional_str(evidence_raw.get("summary")) or "").lower()
-    if not summary:
-        return False
-    if re.search(r"\b(due|payable|net due)\s+(on|upon)\s+receipt\b", summary):
-        return False
-    explicit_due_date_patterns = (
-        r"\b(?:due date|payment due date|payment due|payments? due|due by|due on|please remit by|remit by)\b"
-        r"[^.;,\n]{0,40}"
-        r"(?:\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}\b)",
-    )
-    return any(re.search(pattern, summary) for pattern in explicit_due_date_patterns)
-
-
-def _is_current_bucket_aging_exception(observed: ObservedFacts, evidence_raw: dict[str, Any]) -> bool:
-    if not observed.contains_aging_summary or not observed.account_has_past_due_aging_balance:
-        return False
-    summary = _optional_str(evidence_raw.get("summary")) or ""
-    normalized = summary.lower()
-    return "current aging bucket" in normalized or "in current" in normalized
 
 
 def _has_usable_body_embedded_invoice_facts(invoice_raw: dict[str, Any]) -> bool:
