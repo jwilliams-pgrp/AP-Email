@@ -20,6 +20,12 @@
     "functionAppName": {
       "value": "hw-propertiesapmail-prod"
     },
+    "functionAuthClientId": {
+      "value": "00000000-0000-0000-0000-000000000000"
+    },
+    "functionAuthAllowedAudience": {
+      "value": "api://00000000-0000-0000-0000-000000000000"
+    },
     "functionIdentityName": {
       "value": "id-hw-propertiesapmail-prod"
     },

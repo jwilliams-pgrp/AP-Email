@@ -23,6 +23,12 @@
     "functionAppName": {
       "value": "hw-propertiesapmail-nonprod"
     },
+    "functionAuthClientId": {
+      "value": "fef14fc0-c4f9-4c97-b900-8f31d44681c0"
+    },
+    "functionAuthAllowedAudience": {
+      "value": "api://fef14fc0-c4f9-4c97-b900-8f31d44681c0"
+    },
     "functionIdentityName": {
       "value": "id-hw-propertiesapmail-nonprod"
     },

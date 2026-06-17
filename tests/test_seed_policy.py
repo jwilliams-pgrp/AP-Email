@@ -38,6 +38,7 @@ class SeedPolicyTests(unittest.TestCase):
             "add-appointment-informational-no-action.sql",
             "add-asset-custom-lookup.sql",
             "add-contractor-timesheet-escalation.sql",
+            "add-credit-memo-escalation.sql",
             "add-zero-dollar-invoice-escalation.sql",
             "update-current-reply-no-action.sql",
         }
@@ -93,4 +94,18 @@ class SeedPolicyTests(unittest.TestCase):
         self.assertIn("('amount_zero_invoice', 'document_types', '[\"invoice\"]'::jsonb)", seed_sql)
         self.assertIn("'ESCALATE_0_DOLLAR_INVOICE'", targeted_sql)
         self.assertIn("'amount_zero_invoice'", targeted_sql)
+        self.assertIn("on conflict (rule_code, version)", targeted_sql.lower())
+
+    def test_credit_memos_escalate_in_replayable_baseline(self) -> None:
+        seed_sql = (ROOT / "db" / "seed.sql").read_text(encoding="utf-8")
+        targeted_sql = (ROOT / "db" / "add-credit-memo-escalation.sql").read_text(encoding="utf-8")
+
+        self.assertIn("'ESCALATE_CREDIT_MEMO'", seed_sql)
+        self.assertIn(
+            "('hard_credit_memo', 'Credit memo requires escalation', 135, true, 'document_type', 'ESCALATE', 'ESCALATE_CREDIT_MEMO'",
+            seed_sql,
+        )
+        self.assertIn("('hard_credit_memo', 'document_types', '[\"credit_memo\"]'::jsonb)", seed_sql)
+        self.assertIn("'ESCALATE_CREDIT_MEMO'", targeted_sql)
+        self.assertIn("'hard_credit_memo'", targeted_sql)
         self.assertIn("on conflict (rule_code, version)", targeted_sql.lower())

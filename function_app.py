@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import os
 import sys
-import base64
-import json
 from pathlib import Path
 from typing import Any, Callable
 
@@ -12,6 +10,13 @@ import azure.functions as func
 script_root = Path(os.getenv("AzureWebJobsScriptRoot") or Path(__file__).resolve().parent)
 if str(script_root) not in sys.path:
     sys.path.insert(0, str(script_root))
+
+from ap_automation.services.auth import (  # noqa: E402
+    auth_diagnostics_from_headers,
+    has_dashboard_user_role,
+    principal_from_headers,
+    principal_matches_object_id,
+)
 
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
@@ -30,23 +35,41 @@ def _json_response(payload: Any, status_code: int = 200) -> func.HttpResponse:
 def _require_dashboard_identity(req: func.HttpRequest) -> func.HttpResponse | None:
     if os.getenv("APP_ENV", "LOCAL").strip().upper() != "AZURE":
         return None
-    principal = _swa_principal({key.lower(): value for key, value in req.headers.items()})
+    principal = principal_from_headers(dict(req.headers))
     if principal is None:
         return _json_response({"detail": "Authenticated Static Web Apps identity is required."}, 401)
-    if not principal.get("userId"):
+    if not principal.user_id:
         return _json_response({"detail": "Static Web Apps identity did not include a user id."}, 403)
+    if not has_dashboard_user_role(principal):
+        return _json_response({"detail": "Static Web Apps identity is not assigned the dashboard user role."}, 403)
     return None
 
 
-def _swa_principal(headers: dict[str, str]) -> dict[str, Any] | None:
-    header = headers.get("x-ms-client-principal")
-    if not header:
+def _require_hosted_auth_diagnostic_identity(req: func.HttpRequest) -> func.HttpResponse | None:
+    if os.getenv("APP_ENV", "LOCAL").strip().upper() != "AZURE":
         return None
-    try:
-        principal = json.loads(base64.b64decode(header).decode("utf-8"))
-    except Exception:
+    diagnostics = auth_diagnostics_from_headers(dict(req.headers))
+    if (
+        not diagnostics["has_x_ms_client_principal"]
+        and not diagnostics["has_x_ms_client_principal_id"]
+        and not diagnostics["has_x_ms_client_principal_name"]
+    ):
+        return _json_response({"detail": "Authenticated hosted identity is required."}, 401)
+    return None
+
+
+def _require_logic_app_identity(req: func.HttpRequest) -> func.HttpResponse | None:
+    if os.getenv("APP_ENV", "LOCAL").strip().upper() != "AZURE":
         return None
-    return principal if isinstance(principal, dict) else None
+    expected_principal_id = os.getenv("LOGIC_APP_PRINCIPAL_ID")
+    if not expected_principal_id:
+        return _json_response({"status": "unauthorized", "detail": "LOGIC_APP_PRINCIPAL_ID is not configured."}, 401)
+    principal = principal_from_headers(dict(req.headers))
+    if principal is None:
+        return _json_response({"status": "unauthorized", "detail": "Authenticated Logic App identity is required."}, 401)
+    if not principal_matches_object_id(principal, expected_principal_id):
+        return _json_response({"status": "forbidden", "detail": "Authenticated caller is not the configured Logic App identity."}, 403)
+    return None
 
 
 def _int_query(req: func.HttpRequest, name: str, default: int, minimum: int, maximum: int) -> int:
@@ -108,6 +131,14 @@ def _dashboard_file(req: func.HttpRequest, handler: Callable[[], Any]) -> func.H
         mimetype=result.media_type,
         headers=result.headers,
     )
+
+
+@app.route(route="auth/diagnostics", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+def dashboard_auth_diagnostics(req: func.HttpRequest) -> func.HttpResponse:
+    auth_response = _require_hosted_auth_diagnostic_identity(req)
+    if auth_response is not None:
+        return auth_response
+    return _json_response(auth_diagnostics_from_headers(dict(req.headers)))
 
 
 @app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
@@ -459,11 +490,9 @@ def dashboard_update_runtime_config(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="process-graph-intake", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
 def process_graph_intake(req: func.HttpRequest) -> func.HttpResponse:
-    expected_principal_id = os.getenv("LOGIC_APP_PRINCIPAL_ID")
-    if os.getenv("APP_ENV", "LOCAL").strip().upper() == "AZURE" and expected_principal_id:
-        actual_principal_id = req.headers.get("x-ms-client-principal-id")
-        if actual_principal_id != expected_principal_id:
-            return func.HttpResponse('{"status":"unauthorized"}', status_code=401, mimetype="application/json")
+    auth_response = _require_logic_app_identity(req)
+    if auth_response is not None:
+        return auth_response
     if os.getenv("AP_PROCESS_GRAPH_INTAKE", "true").strip().lower() not in {"1", "true", "yes", "on"}:
         return func.HttpResponse('{"status":"disabled"}', status_code=202, mimetype="application/json")
     from ap_automation.repositories.postgres import PostgresRepository

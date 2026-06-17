@@ -150,7 +150,7 @@ class PdfAttachmentEvaluator:
 
     @staticmethod
     def _normalize_text(text: str) -> str:
-        return re.sub(r"\s+", " ", text).strip()
+        return re.sub(r"\s+", " ", text.replace("\x00", "")).strip()
 
     @staticmethod
     def _quality_score(text: str) -> float:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -84,6 +85,13 @@ class PdfAttachmentEvaluatorTests(unittest.TestCase):
         )[0]
         self.assertFalse(result["eligible"])
         self.assertEqual(result["extraction_method"], "none")
+
+    def test_normalize_text_removes_nul_before_json_persistence(self) -> None:
+        normalized = PdfAttachmentEvaluator._normalize_text("\x00Invoice\n\n100\tVendor\x00")
+
+        self.assertEqual(normalized, "Invoice 100 Vendor")
+        self.assertNotIn("\x00", normalized)
+        self.assertNotIn("\\u0000", json.dumps({"text_excerpt": normalized}))
 
 
 if __name__ == "__main__":

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 import re
 from datetime import date, datetime, timedelta, timezone
@@ -12,6 +11,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from ap_automation.config import load_runtime_config
+from ap_automation.services.auth import principal_from_headers
 from ap_automation.services.local_artifacts import artifact_store_from_env
 
 
@@ -159,15 +159,12 @@ def read_artifact_text(path_value: str | None) -> str:
 
 
 def swa_principal(headers: dict[str, str]) -> dict[str, Any] | None:
-    header = headers.get("x-ms-client-principal")
-    if not header:
+    principal = principal_from_headers(headers)
+    if principal is None:
         return None
-    try:
-        decoded = base64.b64decode(header).decode("utf-8")
-        principal = json.loads(decoded)
-    except Exception:
-        return None
-    return principal if isinstance(principal, dict) else None
+    if principal.raw:
+        return principal.raw
+    return {"userId": principal.user_id, "userRoles": sorted(principal.roles)}
 
 
 _CID_URL_PATTERN = re.compile(r"""(?P<prefix>["'\(])cid:(?P<cid>[^"'\)\s>]+)""", re.IGNORECASE)

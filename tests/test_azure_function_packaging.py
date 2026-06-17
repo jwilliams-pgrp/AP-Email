@@ -51,11 +51,43 @@ def test_function_app_monitor_routes_forward_date_search_params() -> None:
     assert '_int_query(req, "days", 7, 1, 365)' not in function_app
 
 
+def test_function_app_exposes_sanitized_auth_diagnostics() -> None:
+    function_app = (ROOT / "function_app.py").read_text(encoding="utf-8")
+    diagnostic_block = function_app[
+        function_app.index("def dashboard_auth_diagnostics") : function_app.index('@app.route(route="health"')
+    ]
+
+    assert '@app.route(route="auth/diagnostics", methods=["GET"]' in function_app
+    assert "auth_diagnostics_from_headers(dict(req.headers))" in diagnostic_block
+    assert "_require_dashboard_identity(req)" not in diagnostic_block
+
+
 def test_function_app_config_uses_identity_without_pythonpath_workaround() -> None:
     bicep = (ROOT / "infra" / "main.bicep").read_text(encoding="utf-8")
 
     assert "AZURE_CLIENT_ID: identity.properties.clientId" in bicep
     assert "PYTHONPATH:" not in bicep
+
+
+def test_function_app_requires_entra_auth_and_function_api_audience() -> None:
+    bicep = (ROOT / "infra" / "main.bicep").read_text(encoding="utf-8")
+
+    assert "param functionAuthClientId string" in bicep
+    assert "param functionAuthAllowedAudience string" in bicep
+    assert "requireAuthentication: true" in bicep
+    assert "unauthenticatedClientAction: 'Return401'" in bicep
+    assert "clientId: functionAuthClientId" in bicep
+    assert "functionAuthAllowedAudience" in bicep
+    assert "audience: functionAuthAllowedAudience" in bicep
+    assert "FUNCTION_AUTH_ALLOWED_AUDIENCE: functionAuthAllowedAudience" in bicep
+    assert "unauthenticatedClientAction: 'AllowAnonymous'" not in bicep
+
+
+def test_nonprod_parameters_use_function_auth_app_registration() -> None:
+    parameters = json.loads((ROOT / "infra" / "main.parameters.nonprod.json").read_text(encoding="utf-8"))["parameters"]
+
+    assert parameters["functionAuthClientId"]["value"] == "fef14fc0-c4f9-4c97-b900-8f31d44681c0"
+    assert parameters["functionAuthAllowedAudience"]["value"] == "api://fef14fc0-c4f9-4c97-b900-8f31d44681c0"
 
 
 def test_static_web_app_links_function_backend() -> None:

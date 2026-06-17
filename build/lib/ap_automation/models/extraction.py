@@ -15,6 +15,7 @@ DOCUMENT_TYPES = {
     "pay_application",
     "vendor_question",
     "payment_inquiry",
+    "credit_memo",
     "past_due_notice",
     "ach_notice",
     "auto_draft_notice",

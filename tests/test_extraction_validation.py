@@ -142,6 +142,14 @@ class ExtractionValidationTests(unittest.TestCase):
         self.assertEqual(extraction.invoice.property_code, "hw1")
         self.assertEqual(extraction.property_lookup.address, ())
 
+    def test_accepts_credit_memo_document_type(self) -> None:
+        payload = _base_payload()
+        payload["document"]["document_type"] = "credit_memo"
+
+        extraction = validate_extraction(payload)
+
+        self.assertEqual(extraction.document.document_type, "credit_memo")
+
     def test_single_invoice_backup_observed_fact_does_not_derive_separate_lien_waiver_flag(self) -> None:
         payload = _base_payload()
         payload["observed_facts"]["mentions_separate_backup_document"] = True
@@ -1070,7 +1078,7 @@ class ExtractionValidationTests(unittest.TestCase):
             "Confidence keys are overall, document_type, invoice_fields, property_identity, and business_unit",
             "All observed_facts fields are JSON booleans, never strings or omitted keys",
             "property_lookup.property_code, property_lookup.property_name, tenant, address, suite, city, state, zipcode, and address_candidates are arrays",
-            "Allowed document.document_type values are invoice, check_request, statement, account_summary, contract, pay_application, vendor_question, payment_inquiry, past_due_notice, ach_notice, auto_draft_notice, ben_e_keith_notice, lien_release, and unknown",
+            "Allowed document.document_type values are invoice, check_request, statement, account_summary, contract, pay_application, vendor_question, payment_inquiry, credit_memo, past_due_notice, ach_notice, auto_draft_notice, ben_e_keith_notice, lien_release, and unknown",
             "Allowed address candidate labels are deliver_to, ship_to, service_location, site, property, bill_to, and customer_account",
             '"link_only"',
             '"multi_invoice"',
@@ -1115,6 +1123,9 @@ class ExtractionValidationTests(unittest.TestCase):
             "Do not infer pay_application from project billing, progress billing, percent complete, contract amount, prior billed, or current billed terminology alone",
             "Reserve document_type=\"pay_application\" for explicit pay-application or draw-request evidence",
             "Application for Payment, Pay Application, AIA-style payment applications, draw requests",
+            "document_type=\"credit_memo\"",
+            "credit memo, credit memorandum, credit adjustment, credit note, or issued credit",
+            "Do not use credit_memo for ordinary invoices with credits/payments rows",
             "For Ben E Keith related invoice/payment notice emails",
             '"ben_e_keith_notice"',
             '"Ben E. Keith invoice attached"',
@@ -1292,6 +1303,9 @@ class ExtractionValidationTests(unittest.TestCase):
         self.assertIn("account-level aging balances", prompt)
         self.assertIn("invoice_detail", prompt)
         self.assertIn("exception_detail", prompt)
+        self.assertIn("credit memos", prompt)
+        self.assertIn("Use document_type credit_memo only when the source-visible subject", prompt)
+        self.assertIn("Do not use credit_memo for an ordinary payable invoice with credits/payments rows", prompt)
         self.assertIn("Use email_only_detail only when the current email body independently contains AP workflow facts", prompt)
         self.assertIn("Do not create an email item for routine cover text", prompt)
         self.assertIn("generated invoice summary text, including BuildOps-style bodies", prompt)

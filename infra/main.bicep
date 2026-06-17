@@ -26,6 +26,12 @@ param appServicePlanName string
 @description('Name of the Azure Function App.')
 param functionAppName string
 
+@description('Microsoft Entra application client id used by App Service Authentication for the Function API.')
+param functionAuthClientId string
+
+@description('Allowed token audience for authenticated calls to the Function API.')
+param functionAuthAllowedAudience string
+
 @description('Name of the user-assigned managed identity for the Function App.')
 param functionIdentityName string
 
@@ -368,6 +374,7 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
       AP_PROCESS_GRAPH_INTAKE: string(processGraphIntake)
       KEY_VAULT_NAME: keyVault.name
       LOGIC_APP_PRINCIPAL_ID: logicApp.identity.principalId
+      FUNCTION_AUTH_ALLOWED_AUDIENCE: functionAuthAllowedAudience
     }
   }
 }
@@ -433,7 +440,7 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
             uri: functionInvokeUrl
             authentication: {
               type: 'ManagedServiceIdentity'
-              audience: 'https://management.azure.com/'
+              audience: functionAuthAllowedAudience
             }
           }
           runAfter: {}
@@ -454,19 +461,19 @@ resource functionAuthSettings 'Microsoft.Web/sites/config@2024-04-01' = {
       runtimeVersion: '~1'
     }
     globalValidation: {
-      requireAuthentication: false
-      unauthenticatedClientAction: 'AllowAnonymous'
+      requireAuthentication: true
+      unauthenticatedClientAction: 'Return401'
     }
     identityProviders: {
       azureActiveDirectory: {
         enabled: true
         registration: {
-          clientId: identity.properties.clientId
+          clientId: functionAuthClientId
           openIdIssuer: 'https://login.microsoftonline.com/${tenant().tenantId}/v2.0'
         }
         validation: {
           allowedAudiences: [
-            'https://management.azure.com/'
+            functionAuthAllowedAudience
           ]
         }
       }

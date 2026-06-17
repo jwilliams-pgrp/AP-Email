@@ -355,6 +355,7 @@ Normalize extracted property lookup values before database comparison:
 - `pay_application`
 - `vendor_question`
 - `payment_inquiry`
+- `credit_memo`
 - `past_due_notice`
 - `ach_notice`
 - `auto_draft_notice`
@@ -391,6 +392,8 @@ Flags are normalized workflow signals only. Final outcomes must still be selecte
 Routine invoice-payment collection language must not set `observed_facts.indicates_vendor_question_or_payment_inquiry` when a valid invoice attachment is present and extractable. Examples include "attached invoice is due", "please ESCALATE for payment", "when can we expect payment", invoice payment options, remittance instructions, and invoice dispute contact text.
 
 `observed_facts.indicates_vendor_question_or_payment_inquiry` is reserved for AP research or response cases where the sender asks AP to answer, confirm, research, reconcile, or explain invoice, payment, or account facts. Examples include duplicate payment confirmation, "can you please confirm", "please advise", missing remittance, identifying which invoice an ACH paid, payment-to-invoice matching, multiple possible open invoices for one payment, account reconciliation, disputes, credits, missing backup/support questions, and no-attachment vendor payment/account questions.
+
+`document.document_type = "credit_memo"` is reserved for source-visible credit memo documents or emails where the current subject, current body, selected attachment text, or document title identifies a vendor credit memo, credit memorandum, credit adjustment, credit note, or issued credit. It must not be used for ordinary payable invoices that merely contain credits/payments rows, prior credits, discounts, negative line adjustments, or payment history. Credit research, reconciliation, or confirmation questions remain `payment_inquiry` or `vendor_question`.
 
 `observed_facts.indicates_wrong_destination` is reserved for explicit recipient replies or forwards stating they are the wrong person, should not have received the routed email, or that AP should escalate because the prior destination was wrong.
 
@@ -685,6 +688,7 @@ Initial golden scenarios must cover:
 - link-only invoice
 - contract or pay application
 - check request
+- credit memo
 - wrong-destination reply
 - invoice over configured amount threshold
 - duplicate invoice
@@ -753,3 +757,4 @@ Initial golden scenarios must cover:
 - Multi-attachment golden tests prove same-destination items aggregate to one final route, mixed destinations escalate, and separate invoice PDFs do not trigger `multi_invoice_pdf`.
 - Multi-attachment golden tests prove a valid invoice PDF can route when an unrelated unsupported attachment is present but excluded from the invoice item's evidence, while a single unsupported required invoice attachment or mixed supported/unsupported invoice evidence escalates.
 - Golden tests prove standalone contractor timesheets with no invoice route to `ESCALATE_CONTRACTOR_TIMESHEET`, while invoice plus timesheet backup continues to route through separate-backup escalation.
+- Golden tests prove LLM-classified credit memo items route to `ESCALATE_CREDIT_MEMO`.

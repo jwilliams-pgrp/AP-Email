@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.43.8.12551",
-      "templateHash": "1387315494513899228"
+      "templateHash": "7181115452356334187"
     }
   },
   "parameters": {
@@ -59,6 +59,18 @@
       "type": "string",
       "metadata": {
         "description": "Name of the Azure Function App."
+      }
+    },
+    "functionAuthClientId": {
+      "type": "string",
+      "metadata": {
+        "description": "Microsoft Entra application client id used by App Service Authentication for the Function API."
+      }
+    },
+    "functionAuthAllowedAudience": {
+      "type": "string",
+      "metadata": {
+        "description": "Allowed token audience for authenticated calls to the Function API."
       }
     },
     "functionIdentityName": {
@@ -267,7 +279,8 @@
         "TEAMS_CHANNEL_NAME_PROPERTIES_AP": "[parameters('teamsChannelNamePropertiesAp')]",
         "AP_PROCESS_GRAPH_INTAKE": "[string(parameters('processGraphIntake'))]",
         "KEY_VAULT_NAME": "[parameters('keyVaultName')]",
-        "LOGIC_APP_PRINCIPAL_ID": "[reference(resourceId('Microsoft.Logic/workflows', parameters('logicAppName')), '2019-05-01', 'full').identity.principalId]"
+        "LOGIC_APP_PRINCIPAL_ID": "[reference(resourceId('Microsoft.Logic/workflows', parameters('logicAppName')), '2019-05-01', 'full').identity.principalId]",
+        "FUNCTION_AUTH_ALLOWED_AUDIENCE": "[parameters('functionAuthAllowedAudience')]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.Insights/components', parameters('appInsightsName'))]",
@@ -603,7 +616,7 @@
                 "uri": "[format('https://{0}/api/process-graph-intake', reference(resourceId('Microsoft.Web/sites', parameters('functionAppName')), '2024-04-01').defaultHostName)]",
                 "authentication": {
                   "type": "ManagedServiceIdentity",
-                  "audience": "https://management.azure.com/"
+                  "audience": "[parameters('functionAuthAllowedAudience')]"
                 }
               },
               "runAfter": {}
@@ -627,27 +640,26 @@
           "runtimeVersion": "~1"
         },
         "globalValidation": {
-          "requireAuthentication": false,
-          "unauthenticatedClientAction": "AllowAnonymous"
+          "requireAuthentication": true,
+          "unauthenticatedClientAction": "Return401"
         },
         "identityProviders": {
           "azureActiveDirectory": {
             "enabled": true,
             "registration": {
-              "clientId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('functionIdentityName')), '2023-01-31').clientId]",
+              "clientId": "[parameters('functionAuthClientId')]",
               "openIdIssuer": "[format('https://login.microsoftonline.com/{0}/v2.0', tenant().tenantId)]"
             },
             "validation": {
               "allowedAudiences": [
-                "https://management.azure.com/"
+                "[parameters('functionAuthAllowedAudience')]"
               ]
             }
           }
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Web/sites', parameters('functionAppName'))]",
-        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('functionIdentityName'))]"
+        "[resourceId('Microsoft.Web/sites', parameters('functionAppName'))]"
       ]
     },
     {

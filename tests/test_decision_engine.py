@@ -32,6 +32,13 @@ class DecisionEngineGoldenScenarioTests(unittest.TestCase):
         self.assertEqual(decision.outcome, "AUTO")
         self.assertEqual(decision.destination_code, "TIFFANY_BECK")
 
+    def test_credit_memo_routes_to_credit_memo_escalation(self) -> None:
+        decision = self._decide(document_type="credit_memo")
+
+        self.assertEqual(decision.outcome, "ESCALATE")
+        self.assertEqual(decision.destination_code, "ESCALATE_CREDIT_MEMO")
+        self.assertEqual(decision.matched_rule_code, "hard_credit_memo")
+
     def test_hc2_hyphenated_code_routes_to_michele_destination(self) -> None:
         decision = self._decide(property_code="HC-2", bill_to="Hillwood Properties", business_unit_code="PROP")
 
@@ -1682,6 +1689,7 @@ class InMemoryPolicyRepository(PolicyRepository):
             "ESCALATE_0_DOLLAR_INVOICE": Destination("ESCALATE_0_DOLLAR_INVOICE", "0-DOLLAR-INVOICE", None, "ESCALATE", "0 Dollar Invoice"),
             "ESCALATE_WRONG_FILE_TYPE": Destination("ESCALATE_WRONG_FILE_TYPE", "WRONG-FILE-TYPE", None, "ESCALATE", "Wrong File Type"),
             "ESCALATE_CONTRACT_PAY_APP": Destination("ESCALATE_CONTRACT_PAY_APP", "CONTRACT-PAY-APP", None, "ESCALATE", "Contract Pay App"),
+            "ESCALATE_CREDIT_MEMO": Destination("ESCALATE_CREDIT_MEMO", "CREDIT-MEMO", None, "ESCALATE", "Credit Memo"),
             "ESCALATE_CONTRACTOR_TIMESHEET": Destination("ESCALATE_CONTRACTOR_TIMESHEET", "CONTRACTOR-TIMESHEET", None, "ESCALATE", "Contractor Timesheet"),
             "ESCALATE_VENDOR_QUESTION": Destination("ESCALATE_VENDOR_QUESTION", "VENDOR-QUESTION", None, "ESCALATE", "Vendor Question"),
             "ESCALATE_WRONG_DESTINATION": Destination("ESCALATE_WRONG_DESTINATION", "WRONG-DESTINATION", None, "ESCALATE", "Wrong Destination"),
@@ -1956,6 +1964,7 @@ def _rules() -> list[WorkflowRule]:
         _rule("hard_link_only_invoice", 120, "document_flag", "ESCALATE", "ESCALATE_LINK_ONLY", {"flag": "link_only_invoice"}),
         _rule("hard_contractor_timesheet_no_invoice", 125, "document_flag", "ESCALATE", "ESCALATE_CONTRACTOR_TIMESHEET", {"flag": "contractor_timesheet_no_invoice"}),
         _rule("hard_contract_or_pay_app", 130, "document_type", "ESCALATE", "ESCALATE_CONTRACT_PAY_APP", {"document_types": ["contract", "pay_application"]}),
+        _rule("hard_credit_memo", 135, "document_type", "ESCALATE", "ESCALATE_CREDIT_MEMO", {"document_types": ["credit_memo"]}),
         _rule("hard_vendor_inquiry", 140, "document_flag", "ESCALATE", "ESCALATE_VENDOR_QUESTION", {"flag": "vendor_inquiry"}),
         _rule("hard_wrong_destination", 142, "document_flag", "ESCALATE", "ESCALATE_WRONG_DESTINATION", {"flag": "wrong_destination"}),
         _rule("hard_past_due_notice", 145, "document_flag", "ESCALATE", "ESCALATE_PAST_DUE", {"flag": "past_due"}),

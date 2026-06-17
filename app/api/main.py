@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from ap_automation.config import AppEnv
+from ap_automation.services.auth import auth_diagnostics_from_headers, has_dashboard_user_role, principal_from_headers
 
 from . import dashboard_service as service
 
@@ -60,12 +61,28 @@ async def require_swa_identity(request: Request, call_next):
         return await call_next(request)
     if not request.url.path.startswith("/api"):
         return await call_next(request)
-    principal = service.swa_principal(dict(request.headers))
+    if request.url.path == "/api/auth/diagnostics":
+        return await call_next(request)
+    principal = principal_from_headers(dict(request.headers))
     if principal is None:
         return JSONResponse({"detail": "Authenticated Static Web Apps identity is required."}, status_code=401)
-    if not principal.get("userId"):
+    if not principal.user_id:
         return JSONResponse({"detail": "Static Web Apps identity did not include a user id."}, status_code=403)
+    if not has_dashboard_user_role(principal):
+        return JSONResponse({"detail": "Static Web Apps identity is not assigned the dashboard user role."}, status_code=403)
     return await call_next(request)
+
+
+def _require_hosted_auth_diagnostic_identity(headers: dict[str, str]) -> None:
+    if service.RUNTIME_CONFIG.app_env != AppEnv.AZURE:
+        return
+    diagnostics = auth_diagnostics_from_headers(headers)
+    if (
+        not diagnostics["has_x_ms_client_principal"]
+        and not diagnostics["has_x_ms_client_principal_id"]
+        and not diagnostics["has_x_ms_client_principal_name"]
+    ):
+        raise HTTPException(status_code=401, detail="Authenticated hosted identity is required.")
 
 
 def _file_response(result: service.DashboardResponse) -> Response:
@@ -80,6 +97,13 @@ def _file_response(result: service.DashboardResponse) -> Response:
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     return service.health()
+
+
+@app.get("/api/auth/diagnostics")
+def auth_diagnostics(request: Request) -> dict[str, Any]:
+    headers = dict(request.headers)
+    _require_hosted_auth_diagnostic_identity(headers)
+    return auth_diagnostics_from_headers(headers)
 
 
 @app.get("/api/monitor/summary")

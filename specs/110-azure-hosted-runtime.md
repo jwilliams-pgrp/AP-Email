@@ -72,6 +72,11 @@ In Azure:
 - SWA protected routes must not allow the broad built-in `authenticated` role.
 - API requests must include authenticated SWA identity headers.
 - Missing or invalid identity must return explicit `401` or `403`.
+- The Function App must require App Service Authentication / EasyAuth for hosted HTTP endpoints.
+- Function App EasyAuth must use the configured Function API Entra app registration client id and allowed audience, not the Function managed identity client id as the API audience.
+- Dashboard API handlers must validate that authenticated SWA principals include the custom `user` role before returning dashboard data or accepting workflow mutations.
+- The hosted dashboard API may expose a diagnostic auth endpoint only when it returns sanitized identity facts such as header presence and role names. It must not return tokens, raw headers, full principal payloads, email addresses, or secret values.
+- The hosted intake endpoint must require the authenticated Logic App managed identity and must not rely on caller-supplied principal headers unless platform authentication has already accepted the request.
 
 In local development:
 - API authentication may be bypassed only when `APP_ENV=LOCAL`.
@@ -128,6 +133,11 @@ Parameter files must contain placeholders only.
 - Local runtime can still run tests and fixture processing without Azure services.
 - Dashboard API rejects unauthenticated Azure requests.
 - SWA configuration requires Microsoft Entra authentication and the custom SWA `user` role for dashboard routes and `/api/*`.
+- Function App platform authentication rejects direct anonymous hosted HTTP requests.
+- Function App platform authentication accepts only the configured Function API audience.
+- Hosted dashboard API requests from principals without the SWA `user` role return `403`.
+- Hosted dashboard auth diagnostics return sanitized header and role facts without bypassing platform authentication or exposing raw identity material.
+- Hosted Graph intake requests from callers other than the configured Logic App managed identity return `401` or `403`.
 - SWA deployment runs from the built dashboard output directory with the committed SWA config file included, without scanning repository cache or generated-output directories.
 - Function App deployment packages must include the local `ap_automation` wheel as a root-relative `wheels/...` requirement that remote Linux builds can install.
 - Azure clients prefer managed identity / RBAC over static secrets except Microsoft Graph mailbox access, which currently uses the documented Entra client-secret path through Key Vault references.

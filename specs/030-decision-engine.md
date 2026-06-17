@@ -108,6 +108,7 @@ Postgres data owns:
 - Link-only invoice or bill notices, including utility or service bill portal notices with no invoice attachment, route to `ESCALATE`.
 - Contractor timesheet or time-detail document items in a batch with no `invoice` item route to `ESCALATE_CONTRACTOR_TIMESHEET`.
 - Invoice packages with separate timesheet or time-detail backup continue to route through `hard_separate_lien_waiver`.
+- Validated LLM-classified credit memo items route to `ESCALATE_CREDIT_MEMO`.
 - Unsupported or unreadable attachment escalation is scoped to the current item evidence. A disallowed attachment extension or unreadable file must force `ESCALATE` when that file is named in the invoice item's `evidence.source_attachments`; unrelated non-inline attachments on the same email remain persisted and audited but do not block a valid invoice item whose evidence is scoped to a supported readable attachment.
 - If an invoice item names both a supported invoice file and an unsupported backup file in `evidence.source_attachments`, the item must route to `ESCALATE_WRONG_FILE_TYPE` rather than guessing which file is invoice evidence.
 - Ben E Keith flagged items are filed by `ben_e_keith_notice_file` before attachment extension, unreadable required PDF, or low-quality PDF hard exceptions, including `.txt` integration attachments.
