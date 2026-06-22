@@ -27,6 +27,7 @@ from ap_automation.services.msg_parser import ParsedMsg, parse_msg
 from ap_automation.services.pdf_attachment_evaluator import PdfAttachmentEvaluator
 from ap_automation.services.thread_context import latest_body_text
 from ap_automation.services.teams_notifier import TeamsNotifier, TeamsReviewNotification
+from ap_automation.services.word_attachment_evaluator import WordAttachmentEvaluator, summarize_word_evaluation
 
 
 class _FixturePropertyMatchSuggestion:
@@ -70,6 +71,7 @@ class LocalProcessor:
         self._graph_mailbox = graph_mailbox
         self._teams_notifier = teams_notifier
         self._pdf_evaluator = PdfAttachmentEvaluator(project_root)
+        self._word_evaluator = WordAttachmentEvaluator(project_root)
         self._extractor_selector = DocumentExtractorSelector()
         self._document_intelligence_analyzer = document_intelligence_analyzer or DocumentIntelligenceAttachmentAnalyzer(project_root, artifact_store=self._artifacts)
         self._current_run_id: str | None = None
@@ -409,10 +411,17 @@ class LocalProcessor:
                 "business_attachments_extracted": len(_business_attachment_records(attachment_records)),
                 "html_storage_path": html_storage_path,
                 "pdf_evaluation_summary": _pdf_evaluation_summary(attachment_records),
+                "word_evaluation_summary": summarize_word_evaluation(attachment_records),
                 "pdf_evaluation_version": self._pdf_evaluator.evaluation_version,
+                "word_evaluation_version": self._word_evaluator.evaluation_version,
                 "pdf_dependency": {
                     "available": self._pdf_evaluator.dependency_status.available,
                     "detail": self._pdf_evaluator.dependency_status.detail,
+                },
+                "word_dependency": {
+                    "docx_available": self._word_evaluator.dependency_status.docx_available,
+                    "doc_available": self._word_evaluator.dependency_status.doc_available,
+                    "detail": self._word_evaluator.dependency_status.detail,
                 },
                 "attachments": [
                     {
@@ -422,6 +431,7 @@ class LocalProcessor:
                         "file_size_bytes": record["file_size_bytes"],
                         "is_inline": _is_inline_attachment_record(record),
                         "pdf_evaluation": record.get("metadata", {}).get("pdf_evaluation"),
+                        "word_evaluation": record.get("metadata", {}).get("word_evaluation"),
                     }
                     for record in attachment_records
                 ],
@@ -445,6 +455,7 @@ class LocalProcessor:
                         "storage_path": record["storage_path"],
                         "is_inline": _is_inline_attachment_record(record),
                         "extractor_selection": record.get("metadata", {}).get("extractor_selection"),
+                        "word_evaluation": record.get("metadata", {}).get("word_evaluation"),
                     }
                     for record in attachment_records
                 ],
@@ -987,13 +998,15 @@ class LocalProcessor:
         )
 
     def _evaluate_attachment_records(self, attachment_records: list[dict[str, Any]]) -> None:
-        evaluations = self._pdf_evaluator.evaluate_attachments(attachment_records)
-        for record, evaluation in zip(attachment_records, evaluations):
+        pdf_evaluations = self._pdf_evaluator.evaluate_attachments(attachment_records)
+        word_evaluations = self._word_evaluator.evaluate_attachments(attachment_records)
+        for record, pdf_evaluation, word_evaluation in zip(attachment_records, pdf_evaluations, word_evaluations):
             metadata = record.get("metadata")
             if not isinstance(metadata, dict):
                 metadata = {}
                 record["metadata"] = metadata
-            metadata["pdf_evaluation"] = evaluation
+            metadata["pdf_evaluation"] = pdf_evaluation
+            metadata["word_evaluation"] = word_evaluation
             if "text_excerpt" in record:
                 del record["text_excerpt"]
 
@@ -1009,6 +1022,11 @@ class LocalProcessor:
                 pdf_evaluation = metadata.get("pdf_evaluation")
                 if isinstance(pdf_evaluation, dict) and isinstance(pdf_evaluation.get("text_excerpt"), str):
                     record["text_excerpt"] = pdf_evaluation["text_excerpt"]
+                    continue
+            if selection.get("selected_extractor") == "word_text":
+                word_evaluation = metadata.get("word_evaluation")
+                if isinstance(word_evaluation, dict) and isinstance(word_evaluation.get("text_excerpt"), str):
+                    record["text_excerpt"] = word_evaluation["text_excerpt"]
                     continue
             if "text_excerpt" in record:
                 del record["text_excerpt"]
@@ -1721,6 +1739,10 @@ def _has_unreadable_required_attachment(attachment_records: list[dict[str, Any]]
             if not _is_document_intelligence_readable(record):
                 return True
             continue
+        if selected_extractor == "word_text":
+            if not _is_word_readable(record):
+                return True
+            continue
         if not _is_document_intelligence_supported_attachment(record):
             return True
         return True
@@ -1772,6 +1794,15 @@ def _is_pymupdf_readable(record: dict[str, Any]) -> bool:
     if not isinstance(pdf, dict) or pdf.get("status") != "success":
         return False
     text_excerpt = pdf.get("text_excerpt")
+    return isinstance(text_excerpt, str) and bool(" ".join(text_excerpt.split()))
+
+
+def _is_word_readable(record: dict[str, Any]) -> bool:
+    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    word = metadata.get("word_evaluation") if isinstance(metadata, dict) else None
+    if not isinstance(word, dict) or word.get("status") != "success":
+        return False
+    text_excerpt = word.get("text_excerpt")
     return isinstance(text_excerpt, str) and bool(" ".join(text_excerpt.split()))
 
 

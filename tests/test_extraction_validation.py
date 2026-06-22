@@ -1615,8 +1615,44 @@ class ExtractionValidationTests(unittest.TestCase):
         self.assertIn("does not require explicit merge or combine instructions", prompt)
         self.assertIn("Return separate AP-relevant supporting documents as their own batch items", prompt)
         self.assertIn("only when there is a distinct supporting-document item tied to the invoice", prompt)
+        self.assertIn("not payable invoices and do not have invoice number or amount fields", prompt)
+        self.assertIn("do not put invoice-related shift reports", prompt)
+        self.assertIn("excluded_attachments as irrelevant_to_ap_workflow", prompt)
         self.assertIn("Do not set mentions_separate_backup_document=true for embedded invoice pages", prompt)
         self.assertIn("inline images, logos, decorative images, or attachments excluded as irrelevant", prompt)
+
+    def test_azure_openai_triage_prompt_keeps_invoice_backup_as_item(self) -> None:
+        prompt = _triage_prompt(
+            ParsedMsg(
+                subject="Invoice with actual hours",
+                sender_email="vendor@example.com",
+                sender_name="Vendor",
+                received_at=None,
+                body_text="Invoice attached with shift report and actual hours worked.",
+                transport_headers=None,
+                attachments=(),
+                metadata={},
+            ),
+            [
+                {
+                    "file_name": "06 14 CT FIFA Japan Shift Rpt and Actual Hours Worked.pdf",
+                    "content_type": "application/pdf",
+                    "text_excerpt": "Shift Rpt and Actual Hours Worked for Circle T Ranch.",
+                    "metadata": {"extractor_selection": {"selected_extractor": "pymupdf"}},
+                },
+                {
+                    "file_name": "Invoice_1089_from_Blue_Moon_Event_Staffing_LLC.pdf",
+                    "content_type": "application/pdf",
+                    "text_excerpt": "Invoice 1089. Note to customer I have attached the Shift Report and Actual Hours Worked.",
+                    "metadata": {"extractor_selection": {"selected_extractor": "pymupdf"}},
+                },
+            ],
+        )
+
+        self.assertIn("Invoice-related backup documents", prompt)
+        self.assertIn("must appear as items", prompt)
+        self.assertIn("do not put them in excluded_attachments as irrelevant_to_ap_workflow", prompt)
+        self.assertIn("include separate_supporting_document in the invoice item's risk_flags", prompt)
 
 
 def _base_payload() -> dict:

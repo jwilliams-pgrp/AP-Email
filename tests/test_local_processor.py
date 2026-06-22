@@ -399,7 +399,7 @@ class LocalProcessorTests(unittest.TestCase):
             self.assertEqual(item_decision.matched_rule_code, "property_routing_match")
             self.assertNotIn("separate_lien_waiver", operational_repository.extractions[0]["extraction"].document.document_flags)
 
-    def test_invoice_plus_distinct_supporting_document_routes_to_lien_waiver_escalation(self) -> None:
+    def test_invoice_plus_distinct_supporting_document_routes_to_multi_pdf_merge_escalation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             source_email = root / "local" / "ingest" / "sample.eml"
@@ -422,9 +422,9 @@ class LocalProcessorTests(unittest.TestCase):
             self.assertEqual(operational_repository.runs[run_id]["final_outcome"], "ESCALATE")
             item_decision = operational_repository.decisions["decision-1"]
             self.assertEqual(item_decision.matched_rule_code, "hard_separate_lien_waiver")
-            self.assertEqual(item_decision.destination_code, "ESCALATE_LIEN_WAIVER")
+            self.assertEqual(item_decision.destination_code, "ESCALATE_MULTI_PDF_MERGE")
 
-    def test_invoice_plus_staffing_hours_support_routes_to_lien_waiver_escalation(self) -> None:
+    def test_invoice_plus_staffing_hours_support_routes_to_multi_pdf_merge_escalation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             source_email = root / "local" / "ingest" / "sample.eml"
@@ -457,7 +457,7 @@ class LocalProcessorTests(unittest.TestCase):
             self.assertEqual(operational_repository.runs[run_id]["final_outcome"], "ESCALATE")
             item_decision = operational_repository.decisions["decision-1"]
             self.assertEqual(item_decision.matched_rule_code, "hard_separate_lien_waiver")
-            self.assertEqual(item_decision.destination_code, "ESCALATE_LIEN_WAIVER")
+            self.assertEqual(item_decision.destination_code, "ESCALATE_MULTI_PDF_MERGE")
 
     def test_process_msg_extracts_attachments_for_downstream_processing(self) -> None:
         source_email = Path("reference/test_emails/FW_ Attached is your invoice #2857 from Alliance Landscape Co LLC.msg")
@@ -1796,6 +1796,72 @@ class LocalProcessorTests(unittest.TestCase):
             self.assertEqual(records[0].get("text_excerpt"), "Address 9800 HILLWOOD PWKY STE 300")
             self.assertEqual(records[0]["metadata"]["pdf_evaluation"]["status"], "success")
             self.assertEqual(records[0]["metadata"]["extractor_selection"]["selected_extractor"], "pymupdf")
+
+    def test_word_attachment_evaluation_persisted_and_sent_to_extractor(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_email = root / "local" / "ingest" / "sample.msg"
+            source_email.parent.mkdir(parents=True)
+            source_email.write_bytes(b"not-real-msg")
+            parsed_msg = ParsedMsg(
+                subject="6S CFA Fee",
+                sender_email="mitchell.dunson@hillwood.com",
+                sender_name="Mitchell",
+                received_at=None,
+                body_text="Attached check request and invoice backup.",
+                transport_headers=None,
+                attachments=(
+                    ParsedAttachment(
+                        "6S CFA Check Request.docx",
+                        b"docx bytes",
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        {},
+                    ),
+                    ParsedAttachment("CFA Application fees.pdf", b"%PDF-1.4", "application/pdf", {}),
+                ),
+                metadata={},
+            )
+            word_evals = [
+                {
+                    "eligible": True,
+                    "status": "success",
+                    "reason_code": "word_text_extracted",
+                    "text_excerpt": "Check Request Keller 305 Project amount 13713.70",
+                    "text_quality_score": 1.0,
+                    "evaluation_version": "word_eval.v1",
+                },
+                {
+                    "eligible": False,
+                    "status": "unsupported_file_type",
+                    "reason_code": "attachment_not_word",
+                    "text_excerpt": None,
+                    "text_quality_score": 0.0,
+                    "evaluation_version": "word_eval.v1",
+                },
+            ]
+            pdf_evals = [
+                {"eligible": False, "status": "not_pdf", "reason_code": "attachment_not_pdf", "page_count": 0, "extraction_method": "none", "text_excerpt": None, "text_quality_score": 0.0, "evaluation_version": "pdf_eval.v2"},
+                {"eligible": True, "status": "success", "reason_code": "text_extracted", "page_count": 1, "extraction_method": "pymupdf_text", "text_excerpt": "Invoice backup text", "text_quality_score": 0.9, "evaluation_version": "pdf_eval.v2"},
+            ]
+            operational_repository = InMemoryOperationalRepository()
+            llm_extractor = FakeAzureOpenAIExtractor(_payload(document_type="check_request", source_attachments=["6S CFA Check Request.docx"]))
+            processor = LocalProcessor(root, InMemoryPolicyRepository(), operational_repository, llm_extractor, document_intelligence_analyzer=FakeDocumentIntelligenceAnalyzer())
+
+            with patch("ap_automation.services.local_processor._parse_source_email", return_value=parsed_msg):
+                with patch.object(processor._pdf_evaluator, "evaluate_attachments", return_value=pdf_evals):
+                    with patch.object(processor._word_evaluator, "evaluate_attachments", return_value=word_evals):
+                        run_id = processor.process_email(source_email)
+
+            word_record = llm_extractor.attachment_records[0]
+            self.assertEqual(word_record["file_name"], "6S CFA Check Request.docx")
+            self.assertEqual(word_record["text_excerpt"], "Check Request Keller 305 Project amount 13713.70")
+            self.assertEqual(word_record["metadata"]["extractor_selection"]["selected_extractor"], "word_text")
+            attachment_step = next(step for step in operational_repository.steps if step["step_type"] == "ATTACHMENT_PROCESSING")
+            self.assertEqual(attachment_step["output_summary"]["word_evaluation_summary"]["word_success"], 1)
+            self.assertEqual(operational_repository.runs[run_id]["final_outcome"], "AUTO")
+            final_decision = next(reversed(operational_repository.decisions.values()))
+            self.assertEqual(final_decision.destination_code, "MEDIUS_PROPERTIES")
+            self.assertEqual(final_decision.matched_rule_code, "check_request_medius_property")
 
     def test_extractor_receives_excerpt_only_on_success(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

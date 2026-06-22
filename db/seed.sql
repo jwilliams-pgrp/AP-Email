@@ -239,9 +239,9 @@ insert into workflow_rules (
 )
 values
   ('hard_multi_invoice_pdf', 'Multi-invoice PDF requires manual split', 100, true, 'document_flag', 'ESCALATE', 'ESCALATE_MULTI_INVOICE_PDF', 'Attachment appears to contain multiple invoices -> ESCALATE with MULTI-INVOICE-PDF label', '2026-05-07', 1),
-  ('hard_separate_lien_waiver', 'Invoice with separate related backup requires escalation', 110, true, 'document_flag', 'ESCALATE', 'ESCALATE_LIEN_WAIVER', 'Invoice has separate related backup documentation -> ESCALATE with LIEN-WAIVER label', '2026-05-27', 1),
+  ('hard_separate_lien_waiver', 'Invoice with separate related backup requires escalation', 110, true, 'document_flag', 'ESCALATE', 'ESCALATE_MULTI_PDF_MERGE', 'Invoice has separate related backup documentation -> ESCALATE with MULTI-PDF-MERGE label', '2026-05-27', 1),
   ('hard_invoice_plus_lien_waiver', 'Superseded invoice plus lien waiver merge rule', 111, false, 'document_flag', 'ESCALATE', 'ESCALATE_MULTI_PDF_MERGE', 'Superseded by hard_separate_lien_waiver', '2026-05-07', 2),
-  ('hard_wrong_file_type', 'Image, Word, or Excel attachment requires escalation', 115, true, 'attachment_extension', 'ESCALATE', 'ESCALATE_WRONG_FILE_TYPE', 'Attachment file type is not supported for AP invoice routing -> ESCALATE with WRONG-FILE-TYPE label', '2026-05-13', 1),
+  ('hard_wrong_file_type', 'Image or Excel attachment requires escalation', 115, true, 'attachment_extension', 'ESCALATE', 'ESCALATE_WRONG_FILE_TYPE', 'Attachment file type is not supported for AP invoice routing -> ESCALATE with WRONG-FILE-TYPE label', '2026-05-13', 1),
   ('hard_pdf_required_unreadable', 'Required invoice PDF is unreadable', 117, true, 'pre_decision_fact', 'ESCALATE', 'ESCALATE_GENERAL', 'Required invoice PDF could not be deterministically read -> ESCALATE', '2026-05-13', 1),
   ('hard_pdf_text_low_quality', 'Invoice PDF text quality is low', 118, true, 'pre_decision_fact', 'ESCALATE', 'ESCALATE_GENERAL', 'Deterministic PDF text quality is too low for safe routing -> ESCALATE', '2026-05-13', 1),
   ('hard_link_only_invoice', 'Link-only invoice requires escalation', 120, true, 'document_flag', 'ESCALATE', 'ESCALATE_LINK_ONLY', 'Invoice is only available by link -> ESCALATE with LINK-ONLY label', '2026-05-07', 1),
@@ -287,7 +287,7 @@ values
   ('hard_multi_invoice_pdf', 'flag', '"multi_invoice_pdf"'::jsonb),
   ('hard_separate_lien_waiver', 'flag', '"separate_lien_waiver"'::jsonb),
   ('hard_invoice_plus_lien_waiver', 'flag', '"invoice_plus_lien_waiver"'::jsonb),
-  ('hard_wrong_file_type', 'disallowed_extensions', '[".jpg", ".jpeg", ".png", ".doc", ".docx", ".xls", ".xlsx"]'::jsonb),
+  ('hard_wrong_file_type', 'disallowed_extensions', '[".jpg", ".jpeg", ".png", ".xls", ".xlsx"]'::jsonb),
   ('hard_wrong_file_type', 'exempt_document_types', '["ach_notice", "auto_draft_notice", "ben_e_keith_notice"]'::jsonb),
   ('hard_wrong_file_type', 'exempt_document_flags', '["ach_or_auto_draft", "ben_e_keith"]'::jsonb),
   ('hard_pdf_required_unreadable', 'fact_key', '"pdf_required_but_unreadable"'::jsonb),

@@ -101,15 +101,16 @@ Postgres data owns:
 - Duplicate invoice routes to `ESCALATE`.
 - Duplicate status `suspected` means another persisted invoice exists for a different `idempotency_key` with the same normalized vendor name, normalized invoice number, and exact invoice date; `confirmed` is not produced by duplicate policy.
 - Duplicate status `suspected` routes to `ESCALATE`.
-- Invoice packages with separate related backup documentation route to configured `ESCALATE_LIEN_WAIVER` through `hard_separate_lien_waiver`.
-- `mentions_lien_waiver_or_release = true` alone does not route to the superseded `ESCALATE_MULTI_PDF_MERGE` path.
+- Invoice packages with separate related backup documentation route to configured `ESCALATE_MULTI_PDF_MERGE` through `hard_separate_lien_waiver`.
+- `mentions_lien_waiver_or_release = true` alone does not route to `ESCALATE_MULTI_PDF_MERGE`.
 - Past due or overdue invoice notices route to `ESCALATE` using the configured past-due escalation destination.
 - A payable invoice derives the internal `past_due` flag only when validated extraction identifies explicit current-email subject/body language calling the invoice past due, overdue, in collection, or equivalent. Invoice due dates, attachment-only labels, and date comparisons must not derive `past_due`.
 - Link-only invoice or bill notices, including utility or service bill portal notices with no invoice attachment, route to `ESCALATE`.
 - Contractor timesheet or time-detail document items in a batch with no `invoice` item route to `ESCALATE_CONTRACTOR_TIMESHEET`.
-- Invoice packages with separate timesheet or time-detail backup continue to route through `hard_separate_lien_waiver`.
+- Invoice packages with separate timesheet or time-detail backup continue to route through `hard_separate_lien_waiver` to `ESCALATE_MULTI_PDF_MERGE`.
 - Validated LLM-classified credit memo items route to `ESCALATE_CREDIT_MEMO`.
 - Unsupported or unreadable attachment escalation is scoped to the current item evidence. A disallowed attachment extension or unreadable file must force `ESCALATE` when that file is named in the invoice item's `evidence.source_attachments`; unrelated non-inline attachments on the same email remain persisted and audited but do not block a valid invoice item whose evidence is scoped to a supported readable attachment.
+- Word attachments with `.doc` or `.docx` extensions do not trigger `hard_wrong_file_type` solely by extension.
 - If an invoice item names both a supported invoice file and an unsupported backup file in `evidence.source_attachments`, the item must route to `ESCALATE_WRONG_FILE_TYPE` rather than guessing which file is invoice evidence.
 - Ben E Keith flagged items are filed by `ben_e_keith_notice_file` before attachment extension, unreadable required PDF, or low-quality PDF hard exceptions, including `.txt` integration attachments.
 - Messages classified as `payment_inquiry` or `vendor_question`, or with `observed_facts.indicates_vendor_question_or_payment_inquiry = true`, must not be converted to `link_only_invoice` by deterministic link-only overrides.
@@ -120,6 +121,7 @@ Postgres data owns:
 - High-dollar invoice routes to configured `ESCALATE_OVER_10000` when its normal deterministic destination is not `MEDIUS_PROPERTIES`, or when its normal deterministic destination is `MEDIUS_PROPERTIES` but only a job number or no project number was extracted, except matched multifamily assets route to `MEDIUS_MF` first.
 - Check request routes automatically when deterministic property matching resolves to configured `MEDIUS_PROPERTIES`.
 - Check request routes to configured `ESCALATE_CHECK_REQUEST` when deterministic property matching is missing, ambiguous, or resolves to a non-Medius destination.
+- Word check requests route through check-request rules, not `hard_wrong_file_type`.
 - Statement routes to configured statement outcome.
 - Missing required workflow config raises an explicit error in tests.
 - The same input and same workflow rule version produce the same decision.

@@ -427,7 +427,7 @@ class DecisionEngineGoldenScenarioTests(unittest.TestCase):
 
         self.assertEqual(decision.outcome, "ESCALATE")
         self.assertEqual(decision.matched_rule_code, "hard_separate_lien_waiver")
-        self.assertEqual(decision.destination_code, "ESCALATE_LIEN_WAIVER")
+        self.assertEqual(decision.destination_code, "ESCALATE_MULTI_PDF_MERGE")
 
     def test_lien_release_related_alone_does_not_route_to_multi_pdf_merge(self) -> None:
         decision = self._decide(flags=["lien_release_related"])
@@ -596,6 +596,28 @@ class DecisionEngineGoldenScenarioTests(unittest.TestCase):
         self.assertEqual(decision.outcome, "AUTO")
         self.assertEqual(decision.destination_code, "MEDIUS_PROPERTIES")
         self.assertEqual(decision.matched_rule_code, "check_request_medius_property")
+
+    def test_doc_check_request_for_medius_property_routes_to_medius(self) -> None:
+        decision = self._decide(
+            document_type="check_request",
+            property_code="GW70",
+            source_attachments=["check-request.doc"],
+        )
+
+        self.assertEqual(decision.outcome, "AUTO")
+        self.assertEqual(decision.destination_code, "MEDIUS_PROPERTIES")
+        self.assertEqual(decision.matched_rule_code, "check_request_medius_property")
+
+    def test_docx_unmatched_check_request_escalates_as_check_request(self) -> None:
+        decision = self._decide(
+            document_type="check_request",
+            property_code="UNKNOWN",
+            source_attachments=["check-request.docx"],
+        )
+
+        self.assertEqual(decision.outcome, "ESCALATE")
+        self.assertEqual(decision.destination_code, "ESCALATE_CHECK_REQUEST")
+        self.assertEqual(decision.matched_rule_code, "hard_check_request")
 
     def test_check_request_for_non_medius_property_escalates(self) -> None:
         decision = self._decide(document_type="check_request", property_code="EXT1")
@@ -1910,7 +1932,7 @@ class FakePropertyMatchSuggestion:
 def _rules() -> list[WorkflowRule]:
     return [
         _rule("hard_multi_invoice_pdf", 100, "document_flag", "ESCALATE", "ESCALATE_MULTI_INVOICE_PDF", {"flag": "multi_invoice_pdf"}),
-        _rule("hard_separate_lien_waiver", 110, "document_flag", "ESCALATE", "ESCALATE_LIEN_WAIVER", {"flag": "separate_lien_waiver"}),
+        _rule("hard_separate_lien_waiver", 110, "document_flag", "ESCALATE", "ESCALATE_MULTI_PDF_MERGE", {"flag": "separate_lien_waiver"}),
         _rule("hard_no_action_email_pattern", 112, "email_pattern_match", "DISCARD", "NO_ACTION", {"pattern_source": "no_action_email_patterns"}),
         _rule(
             "hard_current_reply_no_action",
@@ -1954,7 +1976,7 @@ def _rules() -> list[WorkflowRule]:
             "ESCALATE",
             "ESCALATE_WRONG_FILE_TYPE",
             {
-                "disallowed_extensions": [".jpg", ".jpeg", ".png", ".doc", ".docx", ".xls", ".xlsx"],
+                "disallowed_extensions": [".jpg", ".jpeg", ".png", ".xls", ".xlsx"],
                 "exempt_document_types": ["ach_notice", "auto_draft_notice", "ben_e_keith_notice"],
                 "exempt_document_flags": ["ach_or_auto_draft", "ben_e_keith"],
             },

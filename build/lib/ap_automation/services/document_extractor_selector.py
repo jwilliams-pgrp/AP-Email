@@ -28,12 +28,15 @@ class DocumentExtractorSelector:
     def select_attachment(self, record: dict[str, Any]) -> dict[str, Any]:
         metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
         pdf_evaluation = metadata.get("pdf_evaluation") if isinstance(metadata, dict) else None
+        word_evaluation = metadata.get("word_evaluation") if isinstance(metadata, dict) else None
         base = _base_selection(pdf_evaluation)
 
         if _is_inline_attachment_record(record):
             return {**base, "selected_extractor": "none", "reason_code": "inline_attachment"}
         if _is_pdf(record):
             return self._select_pdf(pdf_evaluation)
+        if _is_word(record):
+            return self._select_word(base, word_evaluation)
         if _is_document_intelligence_supported_attachment(record):
             return {**base, "selected_extractor": "document_intelligence", "reason_code": "supported_non_pdf_requires_document_intelligence"}
         return {**base, "selected_extractor": "none", "reason_code": "unsupported_file_type"}
@@ -60,6 +63,20 @@ class DocumentExtractorSelector:
         if status == "low_quality":
             return {**base, "selected_extractor": "document_intelligence", "reason_code": "low_quality_pdf_text_requires_document_intelligence"}
         return {**base, "selected_extractor": "document_intelligence", "reason_code": "pdf_evaluation_not_safe"}
+
+    def _select_word(self, base: dict[str, Any], word_evaluation: Any) -> dict[str, Any]:
+        if not isinstance(word_evaluation, dict):
+            return {**base, "selected_extractor": "none", "reason_code": "word_evaluation_missing"}
+        text_excerpt = word_evaluation.get("text_excerpt")
+        if word_evaluation.get("status") == "success" and isinstance(text_excerpt, str) and " ".join(text_excerpt.split()):
+            return {
+                **base,
+                "selected_extractor": "word_text",
+                "reason_code": "word_text_extracted",
+                "text_quality_score": _float(word_evaluation.get("text_quality_score")),
+                "text_length": len(text_excerpt),
+            }
+        return {**base, "selected_extractor": "none", "reason_code": str(word_evaluation.get("reason_code") or "word_text_unavailable")}
 
 
 def summarize_extractor_selection(attachment_records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -106,6 +123,15 @@ def _is_document_intelligence_supported_attachment(record: dict[str, Any]) -> bo
     storage_path = str(record.get("storage_path") or "")
     content_type = str(record.get("content_type") or "").lower()
     return Path(storage_path).suffix.lower() in SUPPORTED_DOCUMENT_INTELLIGENCE_EXTENSIONS or content_type in SUPPORTED_DOCUMENT_INTELLIGENCE_CONTENT_TYPES
+
+
+def _is_word(record: dict[str, Any]) -> bool:
+    storage_path = str(record.get("storage_path") or "")
+    content_type = str(record.get("content_type") or "").lower()
+    return Path(storage_path).suffix.lower() in {".doc", ".docx"} or content_type in {
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }
 
 
 def _is_inline_attachment_record(record: dict[str, Any]) -> bool:

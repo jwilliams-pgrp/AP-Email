@@ -11,3 +11,5 @@ azure-storage-blob>=12.20.0
 msal>=1.28.0
 requests>=2.31.0
 python-dotenv>=1.0.1
+python-docx>=1.1.0
+olefile>=0.47

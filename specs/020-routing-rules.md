@@ -81,20 +81,21 @@ If an attachment contains multiple invoices:
 ### Invoice With Separate Related Backup
 If an invoice has separate related backup documentation:
 - outcome: `ESCALATE`
-- escalate label: `LIEN-WAIVER`
-- destination: configured `ESCALATE_LIEN_WAIVER` destination
+- escalate label: `MULTI-PDF-MERGE`
+- destination: configured `ESCALATE_MULTI_PDF_MERGE` destination
 - reason: invoice has separate related backup documentation
 - This includes lien waivers, lien releases, work orders, tickets, time detail, shift reports, actual hours worked, hours worked, staffing hours, timesheets, time sheets, labor/detail backup, labor/material breakdowns, job completion records, or similar support represented as a distinct extracted AP-relevant document item separate from the invoice item.
 - This rule matches the derived `separate_lien_waiver` document flag only when `document_type = invoice` and batch normalization finds a related supporting-document item. It must not be derived from attachment count or from an invoice item's `observed_facts.mentions_separate_backup_document = true` alone.
 - Embedded invoice pages, invoice line-item detail, same-invoice work descriptions, inline images, logos, decorative images, photo filenames or image references inside the invoice PDF, excluded irrelevant attachments, and not-selected attachments must not qualify as separate related backup.
 - The supporting document does not need to say "invoice", and explicit merge/combine language is not required.
-- `lien_release_related` remains a standalone lien-release classification flag and must not route invoice packages to `ESCALATE_MULTI_PDF_MERGE`.
+- `lien_release_related` remains a standalone lien-release classification flag and must not route invoice packages by itself.
 
 ### Wrong File Type
-If an attachment is image (`jpg`, `jpeg`, `png`) or Word/Excel (`doc`, `docx`, `xls`, `xlsx`):
+If an attachment is image (`jpg`, `jpeg`, `png`) or Excel (`xls`, `xlsx`):
 - outcome: `ESCALATE`
 - escalate label: `WRONG-FILE-TYPE`
 - reason: unsupported AP attachment type for deterministic routing
+- Word attachments (`doc`, `docx`) are supported through Word text extraction and must not trigger this rule solely by extension.
 - Inline or embedded email body assets, such as `cid:` logos and tracking images, are not AP business attachments and must not trigger this rule.
 - Known non-payable filing notices may be exempted by workflow rule conditions when the attachment is supporting evidence rather than an invoice to route for payment.
 - Ben E Keith, ACH, and auto-draft notices with unsupported attachment types must follow their configured filing rules when their document type or derived flags are otherwise clear.
@@ -116,7 +117,7 @@ If a validated extraction batch contains a contractor timesheet, time sheet, tim
 - destination: configured `ESCALATE_CONTRACTOR_TIMESHEET` destination
 - reason: contractor timesheet or time-detail document has no invoice in the run
 - This rule matches the derived `contractor_timesheet_no_invoice` document flag.
-- Invoice packages with separate timesheet or time-detail backup continue to match `hard_separate_lien_waiver` and route to `ESCALATE_LIEN_WAIVER`.
+- Invoice packages with separate timesheet or time-detail backup continue to match `hard_separate_lien_waiver` and route to `ESCALATE_MULTI_PDF_MERGE`.
 - The flag is derived by Python batch normalization and must not be returned by extractors.
 
 ### Contract or Pay Application
@@ -301,7 +302,7 @@ If no rule applies:
 - Extracted property address lookup candidates should include both street-only and complete address strings when both are explicitly visible, with service/property/site/shipping/delivery candidates ordered before billing or bill-to candidates.
 - Database address scoring must rank each structured address candidate by deterministic component score plus candidate priority weight. It must not combine the best street from one candidate with the best city, state, or ZIP from another candidate to create a stronger address match.
 - Property code normalization treats common formatting variants equivalently (for example `HC-2`, `HC 2`, and `HC2`).
-- Multi-invoice PDFs, lien waiver merge cases, link-only invoices, contractor timesheets with no invoice, unsupported image/Word/Excel business attachments, contracts, and pay applications route to `ESCALATE`.
+- Multi-invoice PDFs, lien waiver merge cases, link-only invoices, contractor timesheets with no invoice, unsupported image/Excel business attachments, contracts, and pay applications route to `ESCALATE`.
 - Link-only invoice escalation uses the configured `hard_link_only_invoice` rule and `ESCALATE_LINK_ONLY` destination even when no property or business-unit identity is present.
 - Check requests route automatically only when they match configured `MEDIUS_PROPERTIES`; all other check requests route to `ESCALATE_CHECK_REQUEST`.
 - Inline email body images are persisted for audit/dashboard rendering but excluded from extraction attachment inputs and wrong-file-type evaluation.
