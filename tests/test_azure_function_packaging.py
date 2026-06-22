@@ -87,6 +87,17 @@ def test_function_app_can_manage_logic_app_state() -> None:
     assert "scope: logicApp" in bicep
 
 
+def test_function_app_config_exposes_outbound_email_forwarding_gate() -> None:
+    bicep = (ROOT / "infra" / "main.bicep").read_text(encoding="utf-8")
+    nonprod = json.loads((ROOT / "infra" / "main.parameters.nonprod.json").read_text(encoding="utf-8"))["parameters"]
+    prod = json.loads((ROOT / "infra" / "main.parameters.prod.json").read_text(encoding="utf-8"))["parameters"]
+
+    assert "param enableOutboundEmailForwarding bool = false" in bicep
+    assert "AP_ENABLE_OUTBOUND_EMAIL_FORWARDING: string(enableOutboundEmailForwarding)" in bicep
+    assert nonprod["enableOutboundEmailForwarding"]["value"] is False
+    assert prod["enableOutboundEmailForwarding"]["value"] is True
+
+
 def test_function_app_requires_entra_auth_and_function_api_audience() -> None:
     bicep = (ROOT / "infra" / "main.bicep").read_text(encoding="utf-8")
 

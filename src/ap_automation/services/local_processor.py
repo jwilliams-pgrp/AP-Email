@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ap_automation.agents.property_match_assistant import CachedPropertyMatchReviewer, PropertyMatchAssistant
+from ap_automation.config import load_runtime_config
 from ap_automation.models.decision import Decision, Destination, WorkflowRule
 from ap_automation.models.extraction import DocumentItem, ExcludedAttachment, ExtractionValidationError, validate_extraction_batch, validate_extraction_triage_batch
 from ap_automation.repositories.protocols import OperationalRepository, PolicyRepository
@@ -892,6 +893,7 @@ class LocalProcessor:
             self._operational_repository.enqueue_escalate(email_id, decision_id, final_decision.reason)
         action_output: dict[str, Any] = {"action_plan_path": action_path}
         final_office_web_link = office_web_link
+        routed_graph_message_id = source_message_id_override
         if (
             self._graph_mailbox is not None
             and source_system_override == "graph_mailbox"
@@ -908,10 +910,33 @@ class LocalProcessor:
                 destination_folder_path=None,
             )
             action_output["graph_result"] = graph_result
+            if isinstance(graph_result.get("message_id"), str) and graph_result["message_id"]:
+                routed_graph_message_id = graph_result["message_id"]
             routed_office_web_link = graph_result.get("office_web_link")
             if isinstance(routed_office_web_link, str) and routed_office_web_link:
                 final_office_web_link = routed_office_web_link
                 self._operational_repository.update_email_office_web_link(email_id, final_office_web_link)
+        if (
+            self._graph_mailbox is not None
+            and source_system_override == "graph_mailbox"
+            and routed_graph_message_id
+            and destination is not None
+            and destination.send_email
+        ):
+            runtime_config = load_runtime_config()
+            if runtime_config.enable_outbound_email_forwarding and destination.email_address:
+                action_output["email_forward"] = self._graph_mailbox.forward_message(
+                    routed_graph_message_id,
+                    destination.email_address,
+                )
+            else:
+                action_output["email_forward"] = {
+                    "forwarded": False,
+                    "reason": "disabled_by_runtime_config"
+                    if not runtime_config.enable_outbound_email_forwarding
+                    else "missing_destination_email",
+                    "recipient_email": destination.email_address,
+                }
         if destination is not None and destination.send_teams_message:
             teams_notifier = self._teams_notifier or TeamsNotifier.from_env()
             teams_result = teams_notifier.send_review_notification(
@@ -927,7 +952,7 @@ class LocalProcessor:
             "ACTION",
             {"decision_id": decision_id},
             action_output,
-            reason="Action plan created. Graph mailbox route executed when Graph config is enabled and destination has a parent_folder.",
+            reason="Action plan created. Graph mailbox route and gated forwarding executed when configured.",
         )
         trace_path = self._artifacts.write_trace(run_id, final_decision)
         self._operational_repository.finalize_audit_run(run_id, final_decision.outcome, trace_path)

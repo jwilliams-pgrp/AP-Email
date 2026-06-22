@@ -26,6 +26,7 @@ The system must support local development and testing while also supporting Azur
 - Microsoft Graph mailbox mutations (move/category) run for Graph Intake processing when the destination has a configured `parent_folder`.
 - For Graph Intake folder destinations, the runtime must resolve mailbox folder IDs from configured `parent_folder` values during processing; destination IDs must not be hard-coded in application logic.
 - For Graph Intake messages that are moved, final routing must move the claimed item from `processing` to the configured destination folder and the persisted `office_web_link` and ESCALATE notifications must use the message link after the final move when Graph returns one.
+- Local and development runtime must not forward routed emails to destination recipients, even when `routing_destinations.send_email` is true. Outbound email forwarding requires Azure runtime and explicit `AP_ENABLE_OUTBOUND_EMAIL_FORWARDING=true`.
 - If Graph Intake processing fails after a message is claimed, the runtime must attempt to move the claimed item to the existing `ESCALATE` folder and must report any failure of that recovery move explicitly.
 - Runtime behavior must not branch into a separate non-mutating execution mode.
 - Production side effects outside the configured Graph mailbox require explicit production configuration and must not be reachable by default.
@@ -59,6 +60,7 @@ The system must support local development and testing while also supporting Azur
 - Graph Intake processing reads the oldest Inbox message without requiring a configured intake folder id, claims it by moving it to `processing`, and fetches full body and attachments only from the moved message id.
 - Graph Intake routing resolves folder IDs at runtime from configured destination names/path hints before move.
 - Graph Intake routing persists and notifies with the post-move Office web link when Graph returns one.
+- Graph Intake routing does not forward outbound email in `LOCAL` or development configuration when `AP_ENABLE_OUTBOUND_EMAIL_FORWARDING` is absent or false.
 - Graph Intake idempotency uses `internetMessageId` when Graph supplies it, and falls back to the claimed Graph message id only when no `internetMessageId` is available.
 - Local runtime does not require committed secrets or hard-coded passwords.
 - Azure runtime is selected only with `APP_ENV=AZURE` and explicit Azure configuration.

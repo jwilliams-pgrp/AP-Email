@@ -97,6 +97,9 @@ param intakeConcurrencyRuns int = 1
 @description('Enable timer-triggered Graph intake processing.')
 param processGraphIntake bool = true
 
+@description('Enable outbound email forwarding for routing destinations where send_email is true. Keep false outside PROD unless explicitly approved.')
+param enableOutboundEmailForwarding bool = false
+
 @description('PostgreSQL SKU name.')
 param postgresSkuName string = 'Standard_B1ms'
 
@@ -373,6 +376,7 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
       TEAMS_TEAM_NAME_PROPERTIES_AP: teamsTeamNamePropertiesAp
       TEAMS_CHANNEL_NAME_PROPERTIES_AP: teamsChannelNamePropertiesAp
       AP_PROCESS_GRAPH_INTAKE: string(processGraphIntake)
+      AP_ENABLE_OUTBOUND_EMAIL_FORWARDING: string(enableOutboundEmailForwarding)
       KEY_VAULT_NAME: keyVault.name
       LOGIC_APP_PRINCIPAL_ID: logicApp.identity.principalId
       LOGIC_APP_RESOURCE_ID: logicApp.id

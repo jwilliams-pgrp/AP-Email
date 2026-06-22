@@ -217,6 +217,27 @@ class GraphMailboxClient:
             "office_web_link": updated_web_link,
         }
 
+    def forward_message(self, message_id: str, recipient_email: str, comment: str | None = None) -> dict[str, Any]:
+        recipient = recipient_email.strip()
+        if not recipient:
+            raise GraphMailboxError("Cannot forward Graph message without a recipient email address.")
+        payload: dict[str, Any] = {
+            "toRecipients": [
+                {
+                    "emailAddress": {
+                        "address": recipient,
+                    }
+                }
+            ]
+        }
+        if comment:
+            payload["comment"] = comment
+        self._graph_post(
+            f"{GRAPH_BASE_URL}/users/{self._user_principal_name}/messages/{message_id}/forward",
+            payload,
+        )
+        return {"forwarded": True, "recipient_email": recipient}
+
     def _resolve_required_unique_folder_id_by_display_name(self, display_name: str) -> str:
         cached = self._load_folder_cache()
         target = display_name.strip().lower()

@@ -2916,6 +2916,127 @@ class LocalProcessorTests(unittest.TestCase):
             action_step = next(step for step in operational_repository.steps if step["step_type"] == "ACTION")
             self.assertTrue(action_step["output_summary"]["teams_notification"]["sent"])
 
+    def test_graph_intake_does_not_forward_when_runtime_gate_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fixture = root / "tests" / "fixtures" / "extractions" / "sample.json"
+            fixture.parent.mkdir(parents=True)
+            fixture.write_text(json.dumps(_payload()), encoding="utf-8")
+
+            operational_repository = InMemoryOperationalRepository()
+            graph_mailbox = FakeGraphMailboxClient()
+            policy_repository = InMemoryPolicyRepository()
+            policy_repository.destinations["MEDIUS_PROPERTIES"] = replace(
+                policy_repository.destinations["MEDIUS_PROPERTIES"],
+                email_address="medius@example.com",
+                send_email=True,
+            )
+            processor = LocalProcessor(
+                root,
+                policy_repository,
+                operational_repository,
+                graph_mailbox=graph_mailbox,
+            )
+            envelope = FakeGraphMessageEnvelope(
+                message_id="graph-msg-1",
+                categories=("Inbox",),
+                internet_message_id="<internet-id-1>",
+            )
+
+            with patch.dict("os.environ", {"APP_ENV": "AZURE", "AP_ENABLE_OUTBOUND_EMAIL_FORWARDING": "false"}, clear=False):
+                processor.process_graph_email(envelope, extraction_fixture_path=fixture)
+
+            self.assertEqual(len(graph_mailbox.calls), 1)
+            self.assertEqual(graph_mailbox.forwards, [])
+            action_step = next(step for step in operational_repository.steps if step["step_type"] == "ACTION")
+            self.assertEqual(action_step["output_summary"]["email_forward"]["forwarded"], False)
+            self.assertEqual(action_step["output_summary"]["email_forward"]["reason"], "disabled_by_runtime_config")
+
+    def test_graph_intake_forwards_when_azure_runtime_gate_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fixture = root / "tests" / "fixtures" / "extractions" / "sample.json"
+            fixture.parent.mkdir(parents=True)
+            fixture.write_text(json.dumps(_payload()), encoding="utf-8")
+
+            operational_repository = InMemoryOperationalRepository()
+            graph_mailbox = FakeGraphMailboxClient()
+            policy_repository = InMemoryPolicyRepository()
+            policy_repository.destinations["MEDIUS_PROPERTIES"] = replace(
+                policy_repository.destinations["MEDIUS_PROPERTIES"],
+                email_address="medius@example.com",
+                send_email=True,
+            )
+            processor = LocalProcessor(
+                root,
+                policy_repository,
+                operational_repository,
+                graph_mailbox=graph_mailbox,
+            )
+            envelope = FakeGraphMessageEnvelope(
+                message_id="graph-msg-1",
+                categories=("Inbox",),
+                internet_message_id="<internet-id-1>",
+            )
+
+            with patch.dict("os.environ", {"APP_ENV": "AZURE", "AP_ENABLE_OUTBOUND_EMAIL_FORWARDING": "true"}, clear=False):
+                processor.process_graph_email(envelope, extraction_fixture_path=fixture)
+
+            self.assertEqual(graph_mailbox.calls[0]["message_id"], "graph-msg-1")
+            self.assertEqual(graph_mailbox.forwards, [{"message_id": "moved-graph-msg-1", "recipient_email": "medius@example.com"}])
+            action_step = next(step for step in operational_repository.steps if step["step_type"] == "ACTION")
+            self.assertEqual(action_step["output_summary"]["email_forward"], {"forwarded": True, "recipient_email": "medius@example.com"})
+
+    def test_graph_intake_does_not_forward_without_destination_send_email(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fixture = root / "tests" / "fixtures" / "extractions" / "sample.json"
+            fixture.parent.mkdir(parents=True)
+            fixture.write_text(json.dumps(_payload()), encoding="utf-8")
+
+            operational_repository = InMemoryOperationalRepository()
+            graph_mailbox = FakeGraphMailboxClient()
+            policy_repository = InMemoryPolicyRepository()
+            policy_repository.destinations["MEDIUS_PROPERTIES"] = replace(
+                policy_repository.destinations["MEDIUS_PROPERTIES"],
+                email_address="medius@example.com",
+                send_email=False,
+            )
+            processor = LocalProcessor(root, policy_repository, operational_repository, graph_mailbox=graph_mailbox)
+            envelope = FakeGraphMessageEnvelope(message_id="graph-msg-1", categories=("Inbox",), internet_message_id="<internet-id-1>")
+
+            with patch.dict("os.environ", {"APP_ENV": "AZURE", "AP_ENABLE_OUTBOUND_EMAIL_FORWARDING": "true"}, clear=False):
+                processor.process_graph_email(envelope, extraction_fixture_path=fixture)
+
+            self.assertEqual(graph_mailbox.forwards, [])
+            action_step = next(step for step in operational_repository.steps if step["step_type"] == "ACTION")
+            self.assertNotIn("email_forward", action_step["output_summary"])
+
+    def test_graph_intake_audits_forward_skip_when_destination_email_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fixture = root / "tests" / "fixtures" / "extractions" / "sample.json"
+            fixture.parent.mkdir(parents=True)
+            fixture.write_text(json.dumps(_payload()), encoding="utf-8")
+
+            operational_repository = InMemoryOperationalRepository()
+            graph_mailbox = FakeGraphMailboxClient()
+            policy_repository = InMemoryPolicyRepository()
+            policy_repository.destinations["MEDIUS_PROPERTIES"] = replace(
+                policy_repository.destinations["MEDIUS_PROPERTIES"],
+                email_address=None,
+                send_email=True,
+            )
+            processor = LocalProcessor(root, policy_repository, operational_repository, graph_mailbox=graph_mailbox)
+            envelope = FakeGraphMessageEnvelope(message_id="graph-msg-1", categories=("Inbox",), internet_message_id="<internet-id-1>")
+
+            with patch.dict("os.environ", {"APP_ENV": "AZURE", "AP_ENABLE_OUTBOUND_EMAIL_FORWARDING": "true"}, clear=False):
+                processor.process_graph_email(envelope, extraction_fixture_path=fixture)
+
+            self.assertEqual(graph_mailbox.forwards, [])
+            action_step = next(step for step in operational_repository.steps if step["step_type"] == "ACTION")
+            self.assertEqual(action_step["output_summary"]["email_forward"]["reason"], "missing_destination_email")
+
 
 class FakeAzureOpenAIExtractor:
     def __init__(self, payload: dict[str, Any]) -> None:
@@ -3530,6 +3651,7 @@ class FakePropertyMatchAssistant:
 class FakeGraphMailboxClient:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.forwards: list[dict[str, Any]] = []
 
     def route_message(
         self,
@@ -3555,6 +3677,10 @@ class FakeGraphMailboxClient:
             "message_id": f"moved-{message_id}",
             "office_web_link": f"https://outlook.office.com/mail/{parent_folder}/id/moved-{message_id}",
         }
+
+    def forward_message(self, message_id: str, recipient_email: str, comment: str | None = None) -> dict[str, Any]:
+        self.forwards.append({"message_id": message_id, "recipient_email": recipient_email})
+        return {"forwarded": True, "recipient_email": recipient_email}
 
 
 class FakeGraphMessageEnvelope:

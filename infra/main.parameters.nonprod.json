@@ -89,6 +89,9 @@
     "processGraphIntake": {
       "value": true
     },
+    "enableOutboundEmailForwarding": {
+      "value": false
+    },
     "tags": {
       "value": {
         "environment": "NONPROD",
