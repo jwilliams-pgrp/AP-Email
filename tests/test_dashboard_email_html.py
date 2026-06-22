@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -184,8 +185,98 @@ def test_asset_routes_do_not_expose_legacy_property_paths() -> None:
     paths = {route.path for route in main.app.routes}
     assert "/api/workflow/assets" in paths
     assert "/api/monitor/assets" in paths
+    assert "/api/workflow/process-control" in paths
     assert "/api/workflow/properties" not in paths
     assert "/api/monitor/properties" not in paths
+
+
+def test_process_control_is_unavailable_in_local(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(service, "RUNTIME_CONFIG", SimpleNamespace(app_env=SimpleNamespace(value="LOCAL")))
+    monkeypatch.setenv("LOGIC_APP_RESOURCE_ID", "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Logic/workflows/ap")
+
+    result = service.workflow_process_control()
+
+    assert result["available"] is False
+    assert result["enabled"] is None
+    assert "AZURE" in result["reason"]
+
+
+def test_process_control_requires_logic_app_resource_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(service, "RUNTIME_CONFIG", SimpleNamespace(app_env=SimpleNamespace(value="AZURE")))
+    monkeypatch.delenv("LOGIC_APP_RESOURCE_ID", raising=False)
+
+    result = service.workflow_process_control()
+
+    assert result == {
+        "available": False,
+        "state": None,
+        "enabled": None,
+        "reason": "LOGIC_APP_RESOURCE_ID is not configured.",
+    }
+
+
+def test_process_control_reads_logic_app_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+    monkeypatch.setattr(service, "RUNTIME_CONFIG", SimpleNamespace(app_env=SimpleNamespace(value="AZURE")))
+    monkeypatch.setenv("LOGIC_APP_RESOURCE_ID", "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Logic/workflows/ap")
+    monkeypatch.setattr(service, "_logic_app_arm_headers", lambda: {"Authorization": "Bearer token"})
+
+    def fake_request(method, url, headers, timeout):
+        calls.append((method, url, headers, timeout))
+        return _FakeArmResponse(200, {"properties": {"state": "Enabled"}})
+
+    monkeypatch.setattr(service.requests, "request", fake_request)
+
+    result = service.workflow_process_control()
+
+    assert result == {"available": True, "state": "Enabled", "enabled": True, "reason": None}
+    assert calls == [
+        (
+            "GET",
+            "https://management.azure.com/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Logic/workflows/ap?api-version=2019-05-01",
+            {"Authorization": "Bearer token"},
+            20,
+        )
+    ]
+
+
+def test_update_process_control_disables_and_refreshes_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+    monkeypatch.setattr(service, "RUNTIME_CONFIG", SimpleNamespace(app_env=SimpleNamespace(value="AZURE")))
+    monkeypatch.setenv("LOGIC_APP_RESOURCE_ID", "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Logic/workflows/ap")
+    monkeypatch.setattr(service, "_logic_app_arm_headers", lambda: {"Authorization": "Bearer token"})
+
+    def fake_request(method, url, headers, timeout):
+        calls.append((method, url))
+        if method == "POST":
+            return _FakeArmResponse(200, {})
+        return _FakeArmResponse(200, {"properties": {"state": "Disabled"}})
+
+    monkeypatch.setattr(service.requests, "request", fake_request)
+
+    result = service.update_workflow_process_control({"enabled": False})
+
+    assert result["enabled"] is False
+    assert calls == [
+        (
+            "POST",
+            "https://management.azure.com/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Logic/workflows/ap/disable?api-version=2019-05-01",
+        ),
+        (
+            "GET",
+            "https://management.azure.com/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Logic/workflows/ap?api-version=2019-05-01",
+        ),
+    ]
+
+
+def test_update_process_control_requires_boolean(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(service, "RUNTIME_CONFIG", SimpleNamespace(app_env=SimpleNamespace(value="AZURE")))
+    monkeypatch.setenv("LOGIC_APP_RESOURCE_ID", "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Logic/workflows/ap")
+
+    with pytest.raises(service.DashboardError) as exc_info:
+        service.update_workflow_process_control({"enabled": "false"})
+
+    assert exc_info.value.status_code == 400
 
 
 def test_workflow_asset_custom_reads_asset_custom_table(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -353,3 +444,14 @@ class _FakeDashboardConnection:
 
     def __exit__(self, exc_type, exc, tb):
         return False
+
+
+class _FakeArmResponse:
+    def __init__(self, status_code: int, payload: dict, text: str = "") -> None:
+        self.status_code = status_code
+        self._payload = payload
+        self.text = text
+        self.content = b"{}" if payload else b""
+
+    def json(self) -> dict:
+        return self._payload

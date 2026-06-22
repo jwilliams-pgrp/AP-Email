@@ -95,6 +95,9 @@ Required behavior:
 - Repeated recurrences continue processing the inbox until no message is available.
 - The Function endpoint must reject unauthorized callers in Azure.
 - Disabling intake must be controlled by deployment configuration, not code changes.
+- The hosted Management page process toggle may enable or disable the configured Logic App workflow through the dashboard API.
+- Logic App process control must use Azure managed identity / RBAC and the configured Logic App resource id.
+- Logic App process control must be unavailable in `LOCAL` and must fail explicitly when Azure management configuration or permissions are missing.
 
 ## Artifact Storage
 
@@ -147,5 +150,8 @@ Parameter files must contain placeholders only.
 - Logic App recurrence calls the Function intake endpoint every 30 seconds by default.
 - Logic App recurrence does not start overlapping intake runs.
 - Function intake invocation returns an explicit empty/disabled/processed status.
+- Hosted Management process control reads the current Logic App workflow state and maps `Enabled` to `On` and `Disabled` to `Off`.
+- Hosted Management process `On` enables the configured Logic App workflow and process `Off` disables it.
+- Local process control reports unavailable and does not mutate Azure resources.
 - Function intake processing retries one failed processing attempt after 30 seconds, then reports failure if the retry also fails.
 - Secret hygiene tests fail if tracked source or docs contain obvious real secrets.

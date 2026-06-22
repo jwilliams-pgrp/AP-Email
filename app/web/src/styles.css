@@ -267,6 +267,7 @@ textarea { min-height: 96px; resize: vertical; }
 }
 .processSwitch button.active.on { background: rgba(37, 150, 84, .95); }
 .processSwitch button.active.off { background: rgba(198, 54, 61, .95); }
+.processSwitch button:disabled { cursor: not-allowed; opacity: .58; }
 .propertyEditor, .propertyTablePanel { margin-top: 12px; }
 .propertyForm { display: grid; gap: 12px; }
 .propertyFormGrid { display: grid; grid-template-columns: repeat(7, minmax(120px, 1fr)); gap: 10px; align-items: end; }

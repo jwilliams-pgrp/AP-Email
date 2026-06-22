@@ -121,6 +121,7 @@ var storageTableDataContributorRoleId = '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
 var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
 var monitoringMetricsPublisherRoleId = '3913510d-42f4-4e42-8a64-420c390055eb'
 var cognitiveServicesUserRoleId = 'a97b65f3-24c7-4388-baec-2e87135dc908'
+var logicAppContributorRoleId = '87a39d53-fc1b-424a-814c-f7e04687dc9e'
 var functionInvokeUrl = 'https://${functionApp.properties.defaultHostName}/api/process-graph-intake'
 var foundryEndpoint = 'https://${foundryAccountName}.cognitiveservices.azure.com'
 
@@ -374,6 +375,7 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
       AP_PROCESS_GRAPH_INTAKE: string(processGraphIntake)
       KEY_VAULT_NAME: keyVault.name
       LOGIC_APP_PRINCIPAL_ID: logicApp.identity.principalId
+      LOGIC_APP_RESOURCE_ID: logicApp.id
       FUNCTION_AUTH_ALLOWED_AUDIENCE: functionAuthAllowedAudience
     }
   }
@@ -548,6 +550,16 @@ resource appInsightsRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
     principalId: identity.properties.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', monitoringMetricsPublisherRoleId)
+  }
+}
+
+resource logicAppRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(logicApp.id, identity.id, logicAppContributorRoleId)
+  scope: logicApp
+  properties: {
+    principalId: identity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', logicAppContributorRoleId)
   }
 }
 

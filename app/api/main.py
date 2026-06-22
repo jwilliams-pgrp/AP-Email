@@ -220,6 +220,16 @@ def workflow_runtime_config() -> list[dict[str, Any]]:
     return service.workflow_runtime_config()
 
 
+@app.get("/api/workflow/process-control")
+def workflow_process_control() -> dict[str, Any]:
+    return service.workflow_process_control()
+
+
+@app.patch("/api/workflow/process-control")
+def update_workflow_process_control(payload: dict[str, Any]) -> dict[str, Any]:
+    return service.update_workflow_process_control(payload)
+
+
 @app.get("/api/workflow/audit-events")
 def management_audit_events(limit: int = Query(50, ge=1, le=200)) -> list[dict[str, Any]]:
     return service.management_audit_events(limit)

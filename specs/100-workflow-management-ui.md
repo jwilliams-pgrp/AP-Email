@@ -11,11 +11,14 @@ This spec is pending redesign. New backend work must use `asset` and `ownership`
 The future management page must use asset terminology and the `/api/workflow/assets` backend surface.
 
 Out of scope for this version:
-- process toggle runtime service control
+- direct workflow policy editing beyond the ownership and asset custom surfaces defined here
 
 ## UI Requirements
 
 - The page shows Manage Ownership, Asset Custom, and Asset Lookup sections; legacy add property, manage address, and property management sections are not displayed.
+- The process toggle reads the hosted Azure Logic App workflow state when Azure process control is available.
+- The process toggle switches the hosted Azure Logic App workflow to enabled for `On` and disabled for `Off`.
+- In local runtime, or when Azure Logic App management configuration is missing, the process toggle is disabled and displays an explicit unavailable reason.
 - Manage Ownership reads and writes local Postgres `ownership` rows.
 - Users can add new ownership rows with required `ownership` and `destination` fields only.
 - Users can update the destination for an existing ownership row selected from the ownership dropdown.
@@ -35,7 +38,9 @@ Out of scope for this version:
 ## Safety and Local Behavior
 
 - The page must not mutate external systems.
-- The process toggle is UI-only and does not change runtime service behavior.
+- External mutation from this page is limited to hosted Azure Logic App enable/disable control through the dashboard API.
+- The process toggle must not mutate external systems in `LOCAL`.
+- The process toggle must reflect the current Logic App state after page load and after each toggle mutation.
 - The selected process toggle option is vertically centered; selected `On` is green and selected `Off` is red.
 - Ownership add and destination updates persist to local Postgres `ownership` rows through `/api/workflow/ownership`.
 - Ownership mutations write `management_audit_events` rows with `changed_table = 'ownership'`.
@@ -46,18 +51,20 @@ Out of scope for this version:
 
 Given current frontend tooling in this repo, acceptance validation for this increment is:
 - React production build succeeds.
-- Manual UI verification confirms toggle behavior, ownership add, ownership destination update, Asset Custom add/edit/delete, destination dropdown values including `ESCALATE_SPECIAL_ADDRESS`, and asset lookup search against persisted Postgres data.
+- Manual UI verification confirms Logic App state sync/toggle behavior in Azure or explicit unavailable state locally, ownership add, ownership destination update, Asset Custom add/edit/delete, destination dropdown values including `ESCALATE_SPECIAL_ADDRESS`, and asset lookup search against persisted Postgres data.
 
 When frontend test tooling is introduced, automated coverage must include:
 - search across all Asset Lookup fields
 - add ownership flow
 - update ownership destination flow
-- process toggle state change
+- process toggle state loading, unavailable, enable, and disable states
 
 ## Acceptance Criteria
 
 - Management page only shows process toggle, Manage Ownership, and Asset Lookup features defined in the redesigned spec.
-- Process `On`/`Off` toggle switches visible state in UI.
+- Process `On`/`Off` toggle syncs with the configured Azure Logic App state when available.
+- Process `On` enables the configured Azure Logic App workflow and process `Off` disables it.
+- Process control is visibly unavailable and non-mutating in local runtime or when Azure management configuration is absent.
 - Manage Ownership reads from local Postgres `ownership` rows.
 - Manage Ownership supports persisted add through API with only `ownership` and `destination` required.
 - Manage Ownership supports persisted destination updates for selected existing ownership rows.

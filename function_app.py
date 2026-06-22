@@ -327,6 +327,20 @@ def dashboard_workflow_runtime_config(req: func.HttpRequest) -> func.HttpRespons
     return _dashboard_json(req, service.workflow_runtime_config)
 
 
+@app.route(route="workflow/process-control", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+def dashboard_workflow_process_control(req: func.HttpRequest) -> func.HttpResponse:
+    from app.api import dashboard_service as service
+
+    return _dashboard_json(req, service.workflow_process_control)
+
+
+@app.route(route="workflow/process-control", methods=["PATCH"], auth_level=func.AuthLevel.ANONYMOUS)
+def dashboard_update_workflow_process_control(req: func.HttpRequest) -> func.HttpResponse:
+    from app.api import dashboard_service as service
+
+    return _dashboard_json(req, lambda: service.update_workflow_process_control(_json_body(req)))
+
+
 @app.route(route="workflow/audit-events", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def dashboard_workflow_audit_events(req: func.HttpRequest) -> func.HttpResponse:
     from app.api import dashboard_service as service

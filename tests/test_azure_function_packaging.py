@@ -39,6 +39,15 @@ def test_function_app_exposes_asset_custom_workflow_routes() -> None:
     assert 'service.delete_workflow_asset_custom(req.route_params["asset_custom_id"])' in function_app
 
 
+def test_function_app_exposes_process_control_routes() -> None:
+    function_app = (ROOT / "function_app.py").read_text(encoding="utf-8")
+
+    assert '@app.route(route="workflow/process-control", methods=["GET"]' in function_app
+    assert '@app.route(route="workflow/process-control", methods=["PATCH"]' in function_app
+    assert "service.workflow_process_control" in function_app
+    assert "service.update_workflow_process_control(_json_body(req))" in function_app
+
+
 def test_function_app_monitor_routes_forward_date_search_params() -> None:
     function_app = (ROOT / "function_app.py").read_text(encoding="utf-8")
 
@@ -67,6 +76,15 @@ def test_function_app_config_uses_identity_without_pythonpath_workaround() -> No
 
     assert "AZURE_CLIENT_ID: identity.properties.clientId" in bicep
     assert "PYTHONPATH:" not in bicep
+
+
+def test_function_app_can_manage_logic_app_state() -> None:
+    bicep = (ROOT / "infra" / "main.bicep").read_text(encoding="utf-8")
+
+    assert "LOGIC_APP_RESOURCE_ID: logicApp.id" in bicep
+    assert "logicAppContributorRoleId" in bicep
+    assert "resource logicAppRole 'Microsoft.Authorization/roleAssignments@2022-04-01'" in bicep
+    assert "scope: logicApp" in bicep
 
 
 def test_function_app_requires_entra_auth_and_function_api_audience() -> None:

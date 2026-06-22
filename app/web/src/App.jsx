@@ -551,7 +551,15 @@ const EMPTY_ASSET_CUSTOM_FORM = {
 };
 
 function Management() {
-  const [isProcessOn, setIsProcessOn] = useState(true);
+  const [processControl, setProcessControl] = useState({
+    available: false,
+    state: null,
+    enabled: null,
+    reason: "",
+  });
+  const [processLoading, setProcessLoading] = useState(true);
+  const [processSaving, setProcessSaving] = useState(false);
+  const [processError, setProcessError] = useState("");
   const [ownershipRows, setOwnershipRows] = useState([]);
   const [assetCustomRows, setAssetCustomRows] = useState([]);
   const [destinations, setDestinations] = useState([]);
@@ -571,6 +579,44 @@ function Management() {
   const [assetCustomEditingId, setAssetCustomEditingId] = useState("");
   const [assetCustomForm, setAssetCustomForm] = useState(EMPTY_ASSET_CUSTOM_FORM);
   const [assetCustomMessage, setAssetCustomMessage] = useState("");
+
+  async function loadProcessControl() {
+    setProcessLoading(true);
+    setProcessError("");
+    try {
+      const res = await fetch(`${API}/api/workflow/process-control`);
+      setProcessControl(await readJsonResponse(res, "Failed to load process control."));
+    } catch (err) {
+      setProcessError(err.message);
+      setProcessControl({
+        available: false,
+        state: null,
+        enabled: null,
+        reason: err.message,
+      });
+    } finally {
+      setProcessLoading(false);
+    }
+  }
+
+  async function setProcessEnabled(enabled) {
+    if (!processControl.available || processSaving || processControl.enabled === enabled) return;
+    setProcessSaving(true);
+    setProcessError("");
+    try {
+      const res = await fetch(`${API}/api/workflow/process-control`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      setProcessControl(await readJsonResponse(res, "Failed to update process control."));
+    } catch (err) {
+      setProcessError(err.message);
+      await loadProcessControl();
+    } finally {
+      setProcessSaving(false);
+    }
+  }
 
   async function loadOwnership() {
     setOwnershipLoading(true);
@@ -625,6 +671,7 @@ function Management() {
   }
 
   useEffect(() => {
+    loadProcessControl();
     loadOwnership();
     loadDestinations();
     loadAssetCustom();
@@ -805,20 +852,38 @@ function Management() {
     );
   }, [assetLookupRows, search]);
 
+  const processUnavailableReason = processControl.reason || (processLoading ? "Loading Logic App state..." : "Logic App control is unavailable.");
+  const processControlsDisabled = processLoading || processSaving || !processControl.available;
+
   return (
     <main className="workspace">
       <section className="panel processTogglePanel">
         <div className="processToggleHeader">
           <div>
             <h1>Process control</h1>
-            <p>UI-only process switch for local management preview.</p>
+            <p>{processControl.available ? "Azure Logic App intake scheduler control." : processUnavailableReason}</p>
           </div>
           <div className="processSwitch" role="group" aria-label="Process on off toggle">
-            <button className={isProcessOn ? "active on" : ""} onClick={() => setIsProcessOn(true)} type="button">On</button>
-            <button className={!isProcessOn ? "active off" : ""} onClick={() => setIsProcessOn(false)} type="button">Off</button>
+            <button
+              className={processControl.enabled === true ? "active on" : ""}
+              disabled={processControlsDisabled}
+              onClick={() => setProcessEnabled(true)}
+              type="button"
+            >
+              On
+            </button>
+            <button
+              className={processControl.enabled === false ? "active off" : ""}
+              disabled={processControlsDisabled}
+              onClick={() => setProcessEnabled(false)}
+              type="button"
+            >
+              Off
+            </button>
           </div>
         </div>
-        <Badge label={isProcessOn ? "ON" : "OFF"} />
+        {processError && <Banner tone="bad" text={processError} />}
+        <Badge label={processLoading || processSaving ? "SYNCING" : processControl.enabled === true ? "ON" : processControl.enabled === false ? "OFF" : "UNAVAILABLE"} />
       </section>
 
       <section className="panel propertyEditor">

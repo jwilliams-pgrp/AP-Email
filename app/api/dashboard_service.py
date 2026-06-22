@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -8,6 +9,7 @@ from typing import Any
 from urllib.parse import quote
 
 import psycopg
+import requests
 from psycopg.rows import dict_row
 
 from ap_automation.config import load_runtime_config
@@ -586,6 +588,85 @@ def workflow_rules() -> list[dict[str, Any]]:
 def workflow_destinations() -> list[dict[str, Any]]:
     with connect() as conn:
         return json_ready(conn.execute("select * from routing_destinations order by destination_code").fetchall())
+
+
+def _logic_app_unavailable(reason: str) -> dict[str, Any]:
+    return {"available": False, "state": None, "enabled": None, "reason": reason}
+
+
+def _logic_app_resource_id() -> str | None:
+    value = os.getenv("LOGIC_APP_RESOURCE_ID")
+    if value:
+        return value.strip() or None
+    return None
+
+
+def _logic_app_arm_headers() -> dict[str, str]:
+    try:
+        from azure.identity import DefaultAzureCredential
+    except Exception as exc:
+        raise DashboardError(503, "azure-identity is required for Logic App control.") from exc
+    token = DefaultAzureCredential().get_token("https://management.azure.com/.default").token
+    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+
+def _logic_app_arm_request(method: str, path_suffix: str = "") -> dict[str, Any]:
+    resource_id = _logic_app_resource_id()
+    if not resource_id:
+        raise DashboardError(503, "LOGIC_APP_RESOURCE_ID is not configured.")
+    url = f"https://management.azure.com{resource_id}{path_suffix}?api-version=2019-05-01"
+    try:
+        response = requests.request(method, url, headers=_logic_app_arm_headers(), timeout=20)
+    except requests.RequestException as exc:
+        raise DashboardError(502, "Azure Resource Manager request for Logic App control failed.") from exc
+    if response.status_code >= 400:
+        detail = "Azure Resource Manager rejected the Logic App control request."
+        try:
+            body = response.json()
+            message = body.get("error", {}).get("message") if isinstance(body, dict) else None
+            if message:
+                detail = message
+        except ValueError:
+            if response.text:
+                detail = response.text[:500]
+        raise DashboardError(response.status_code, detail)
+    if not response.content:
+        return {}
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise DashboardError(502, "Azure Resource Manager returned a non-JSON Logic App response.") from exc
+
+
+def _logic_app_state_response(payload: dict[str, Any]) -> dict[str, Any]:
+    state = ((payload.get("properties") or {}).get("state") or "").strip()
+    enabled = state.lower() == "enabled" if state else None
+    return {
+        "available": True,
+        "state": state or None,
+        "enabled": enabled,
+        "reason": None,
+    }
+
+
+def workflow_process_control() -> dict[str, Any]:
+    if RUNTIME_CONFIG.app_env.value != "AZURE":
+        return _logic_app_unavailable("Logic App control is only available in AZURE runtime.")
+    if not _logic_app_resource_id():
+        return _logic_app_unavailable("LOGIC_APP_RESOURCE_ID is not configured.")
+    return _logic_app_state_response(_logic_app_arm_request("GET"))
+
+
+def update_workflow_process_control(payload: dict[str, Any]) -> dict[str, Any]:
+    if RUNTIME_CONFIG.app_env.value != "AZURE":
+        raise DashboardError(409, "Logic App control is only available in AZURE runtime.")
+    if "enabled" not in payload or not isinstance(payload["enabled"], bool):
+        raise DashboardError(400, "enabled boolean is required.")
+    if not _logic_app_resource_id():
+        raise DashboardError(503, "LOGIC_APP_RESOURCE_ID is not configured.")
+    action = "/enable" if payload["enabled"] else "/disable"
+    _logic_app_arm_request("POST", action)
+    return workflow_process_control()
 
 
 def workflow_ownership() -> list[dict[str, Any]]:
