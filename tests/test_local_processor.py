@@ -2672,6 +2672,71 @@ class LocalProcessorTests(unittest.TestCase):
         self.assertEqual(extraction.invoice.property_name, "Hillwood Commons I")
         self.assertNotIn("statement_or_account_summary", extraction.document.document_flags)
 
+    def test_city_of_roanoke_style_utility_bill_routes_as_invoice_not_statement(self) -> None:
+        run_id, operational_repository = self._process_fixture_with_parsed_text(
+            subject="City of Roanoke Utility Bill",
+            body_text=(
+                "City of Roanoke Utility Bill\n"
+                "Customer Account Information\n"
+                "Account Number 75-0136-00\n"
+                "Name Hillwood Development\n"
+                "Service Address 1051 Republic Drive\n"
+                "Billing Period From 05/15/2026 To 06/15/2026\n"
+                "Due Date 07/10/2026\n"
+                "Current Bill $935.92\n"
+                "Amount Due $850.84\n"
+                "Amount Due After 07/10/2026 $850.84\n"
+                "Previous Balance $822.20\n"
+                "Payments ($822.20)\n"
+                "Past Due Amount $0.00\n"
+                "Water 340.82 Sewer 510.02\n"
+                "Bill To Hillwood Development 9800 Hillwood Pkwy Suite 300 Fort Worth TX 76177"
+            ),
+            payload_overrides={
+                "document_type": "invoice",
+                "invoice_number": "75-0136-00",
+                "invoice_date": "2026-06-23",
+                "due_date": "2026-07-10",
+                "vendor_name": "City of Roanoke",
+                "amount": 850.84,
+                "property_code": "HW1",
+                "bill_to": "Hillwood Development 9800 Hillwood Pkwy Suite 300 Fort Worth TX 76177",
+                "bill_to_name_line_1": "Hillwood Development",
+                "bill_to_street_address": "9800 Hillwood Pkwy",
+                "bill_to_suite": "Suite 300",
+                "bill_to_city": "Fort Worth",
+                "bill_to_state": "TX",
+                "bill_to_zip_code": "76177",
+                "service_address": "1051 Republic Drive",
+                "source_attachments": ["UtilityBill.pdf"],
+                "has_invoice_attachment": True,
+                "evidence_summary": (
+                    "Single current payable City of Roanoke utility bill with account 75-0136-00, "
+                    "service address, water/sewer charges, current amount due 850.84, due date, "
+                    "previous balance/payment rows, and Past Due Amount 0.00."
+                ),
+            },
+            observed_overrides={
+                "indicates_statement_or_account_summary": False,
+                "current_invoice_is_past_due": False,
+            },
+        )
+
+        decision = operational_repository.decisions["decision-1"]
+        self.assertEqual(operational_repository.runs[run_id]["final_outcome"], "AUTO")
+        self.assertEqual(decision.matched_rule_code, "property_routing_match")
+        self.assertEqual(decision.destination_code, "MEDIUS_PROPERTIES")
+        self.assertNotEqual(decision.destination_code, "FOLDER_STATEMENTS")
+        extraction = operational_repository.extractions[0]["extraction"]
+        self.assertIsNotNone(extraction)
+        self.assertEqual(extraction.document.document_type, "invoice")
+        self.assertEqual(extraction.invoice.vendor_name, "City of Roanoke")
+        self.assertEqual(extraction.invoice.invoice_number, "75-0136-00")
+        self.assertEqual(extraction.invoice.amount, 850.84)
+        self.assertFalse(extraction.observed_facts.current_invoice_is_past_due)
+        self.assertNotIn("statement_or_account_summary", extraction.document.document_flags)
+        self.assertNotIn("past_due", extraction.document.document_flags)
+
     def test_payment_link_heuristic_requires_link_and_payment_signal(self) -> None:
         self.assertTrue(_looks_like_payment_link_only_email("Your bill is due. Log In https://example.com"))
         self.assertTrue(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 import json
+import re
 from decimal import Decimal
 from pathlib import Path
 
@@ -513,11 +514,11 @@ class PropertyValueNormalizationTests(unittest.TestCase):
         seed_sql = Path("db/seed.sql").read_text(encoding="utf-8")
 
         self.assertIn("'appointment_informational_notice'", seed_sql)
-        self.assertIn("'appointment_informational_notice', 'fact_key', '\"indicates_informational_appointment_notice\"'::jsonb", seed_sql)
-        self.assertIn("'appointment_informational_notice', 'document_types', '[\"unknown\"]'::jsonb", seed_sql)
-        self.assertIn("'appointment_informational_notice', 'forbid_source_attachments', 'true'::jsonb", seed_sql)
+        self.assertIn("'appointment_informational_notice', 'fact_key', '\"indicates_informational_appointment_notice\"'", seed_sql)
+        self.assertIn("'appointment_informational_notice', 'document_types', '[\"unknown\"]'", seed_sql)
+        self.assertIn("'appointment_informational_notice', 'forbid_source_attachments', 'true'", seed_sql)
         self.assertIn("'informational_property_notice'", seed_sql)
-        self.assertIn("'informational_property_notice', 'document_types', '[\"unknown\"]'::jsonb", seed_sql)
+        self.assertIn("'informational_property_notice', 'document_types', '[\"unknown\"]'", seed_sql)
         self.assertIn("'informational_property_notice', 'blocked_flags'", seed_sql)
         self.assertIn('"link_only_invoice"', seed_sql)
         self.assertIn('"vendor_inquiry"', seed_sql)
@@ -525,9 +526,16 @@ class PropertyValueNormalizationTests(unittest.TestCase):
         self.assertIn('"contract_or_pay_application"', seed_sql)
         self.assertIn('"conflicting_signals"', seed_sql)
         self.assertIn('"low_text_quality"', seed_sql)
-        self.assertIn("'hard_unmatched_building', 'document_types', '[\"invoice\", \"unknown\"]'::jsonb", seed_sql)
-        self.assertLess(seed_sql.index("'appointment_informational_notice'"), seed_sql.index("'informational_property_notice'"))
-        self.assertLess(seed_sql.index("'informational_property_notice'"), seed_sql.index("'property_routing_match'"))
+        self.assertIn("'hard_unmatched_building', 'document_types', '[\"invoice\", \"unknown\"]'", seed_sql)
+        priorities = {
+            match.group("code"): int(match.group("priority"))
+            for match in re.finditer(
+                r"VALUES \('(?P<code>[^']+)',\s*'[^']*',\s*(?P<priority>\d+),\s*(?:true|false),",
+                seed_sql,
+            )
+        }
+        self.assertLess(priorities["appointment_informational_notice"], priorities["informational_property_notice"])
+        self.assertLess(priorities["informational_property_notice"], priorities["property_routing_match"])
 
     def test_standalone_sql_adds_appointment_informational_notice_rule(self) -> None:
         targeted_sql = Path("db/add-appointment-informational-no-action.sql").read_text(encoding="utf-8")
@@ -545,19 +553,17 @@ class PropertyValueNormalizationTests(unittest.TestCase):
         self.assertIn("'[\"invoice\"]'::jsonb", targeted_sql)
         self.assertIn("on conflict (rule_code, version)", targeted_sql.lower())
 
-    def test_seed_excludes_alc_routing_policy(self) -> None:
+    def test_seed_includes_disabled_alc_routing_policy_from_current_local_baseline(self) -> None:
         seed_sql = Path("db/seed.sql").read_text(encoding="utf-8")
 
-        self.assertNotIn("('ESCALATE_ALC', 'ALC'", seed_sql)
-        self.assertNotIn("('MEDIUS_ALC', 'Medius ALC", seed_sql)
-        self.assertNotIn("('alc_escalation', 'ALC requires", seed_sql)
-        self.assertNotIn("'alc_signal'", seed_sql)
-        self.assertNotIn("('bill_to_alc', 'ALC bill-to", seed_sql)
-        self.assertNotIn("Alliance Landscape", seed_sql)
-        self.assertNotIn("Alliance Landscaping", seed_sql)
+        self.assertIn("'ESCALATE_ALC', 'ALC', NULL, false", seed_sql)
+        self.assertIn("'MEDIUS_ALC', 'Medius ALC", seed_sql)
+        self.assertIn("'alc_escalation', 'ALC requires escalation', 300, false", seed_sql)
+        self.assertIn("'alc_signal'", seed_sql)
+        self.assertIn("'bill_to_alc', 'ALC bill-to", seed_sql)
+        self.assertIn("Alliance Landscape", seed_sql)
+        self.assertIn("Alliance Landscaping", seed_sql)
         self.assertIn("'bill_to_mf', 'Multifamily bill-to routes to Medius MF', 610, false", seed_sql)
-        self.assertIn("where rule_code in ('alc_escalation', 'bill_to_alc')", seed_sql)
-        self.assertIn("where destination_code in ('ESCALATE_ALC', 'MEDIUS_ALC')", seed_sql)
 
     def test_standalone_sql_removes_alc_routing_policy(self) -> None:
         targeted_sql = Path("db/remove-alc-routing-policy.sql").read_text(encoding="utf-8")

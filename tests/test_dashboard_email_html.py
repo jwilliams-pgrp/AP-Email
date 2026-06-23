@@ -319,6 +319,67 @@ def test_monitor_summary_counts_all_escalate_queue_rows(monkeypatch: pytest.Monk
     assert connection.matching_sql("from escalate_queue")[0].strip() == "select count(*)::int as count from escalate_queue"
 
 
+def test_monitor_summary_counts_only_final_decisions(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = _FakeDashboardConnection(
+            {
+                "from decisions d": [{"outcome": "AUTO", "count": 4}],
+                "from escalate_queue": [{"count": 0}],
+                "avg(extract": [{"seconds": None}],
+                "count(*) filter": [{"high": 4, "medium": 0, "low": 0}],
+                "select status, count(*)::int as count": [],
+            }
+        )
+    monkeypatch.setattr(service, "connect", lambda: connection)
+
+    summary = service.monitor_summary()
+
+    assert summary["total_processed"] == 4
+    assert "d.document_item_id is null" in connection.matching_sql("from decisions d")[0].lower()
+    assert "document_item_id is null" in connection.matching_sql("count(*) filter")[0].lower()
+
+
+def test_monitor_throughput_includes_discarded_final_decisions(monkeypatch: pytest.MonkeyPatch) -> None:
+    rows = [
+        {"day": _FakeDay("2026-06-01"), "outcome": "AUTO", "count": 2},
+        {"day": _FakeDay("2026-06-01"), "outcome": "DISCARD", "count": 1},
+        {"day": _FakeDay("2026-06-02"), "outcome": "FILE", "count": 1},
+    ]
+    connection = _FakeDashboardConnection(
+        {
+            "from decisions d": rows,
+            "from audit_runs": [{"day": _FakeDay("2026-06-01"), "count": 1}],
+        }
+    )
+    monkeypatch.setattr(service, "connect", lambda: connection)
+
+    result = service.monitor_throughput("2026-06-01", "2026-06-02")
+
+    assert result == [
+        {"day": "2026-06-01", "automated": 2, "escalate": 0, "failed": 1, "filed": 0, "discarded": 1},
+        {"day": "2026-06-02", "automated": 0, "escalate": 0, "failed": 0, "filed": 1, "discarded": 0},
+    ]
+    sql = connection.matching_sql("from decisions d")[0].lower()
+    assert "d.document_item_id is null" in sql
+    assert "'discard'" in sql
+    assert "'flag'" not in sql
+
+
+def test_monitor_reason_and_destination_counts_use_final_decisions(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = _FakeDashboardConnection(
+        {
+            "from decisions d": [{"reason": "Manual review", "count": 1}],
+            "left join routing_destinations": [{"destination_code": "NONE", "display_name": "No destination", "count": 1}],
+        }
+    )
+    monkeypatch.setattr(service, "connect", lambda: connection)
+
+    service.monitor_escalate_reasons("2026-06-01", "2026-06-02")
+    service.monitor_destinations("2026-06-01", "2026-06-02")
+
+    for sql in connection.matching_sql("from decisions d"):
+        assert "d.document_item_id is null" in sql.lower()
+
+
 def test_monitor_escalate_emails_reads_reloaded_mirror_without_status_filter(monkeypatch: pytest.MonkeyPatch) -> None:
     rows = [
         {
@@ -444,6 +505,14 @@ class _FakeDashboardConnection:
 
     def __exit__(self, exc_type, exc, tb):
         return False
+
+
+class _FakeDay:
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+    def isoformat(self) -> str:
+        return self.value
 
 
 class _FakeArmResponse:

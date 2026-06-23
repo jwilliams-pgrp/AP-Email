@@ -44,7 +44,6 @@ The monitor page must show high-level business monitoring metrics:
 - automation rate
 - ESCALATE rate
 - file rate
-- flag rate
 - discard rate
 - error or failed-run rate
 - current ESCALATE folder email count
@@ -53,7 +52,7 @@ The monitor page must show high-level business monitoring metrics:
 - confidence distribution
 - top ESCALATE reasons
 - top routing destinations
-- trended daily throughput as a stacked bar chart for automated, ESCALATE, failed, and filed categories
+- trended daily throughput as a stacked bar chart for automated, ESCALATE, failed, filed, and discarded categories
 - ESCALATE emails currently present in the mailbox `ESCALATE` folder
 - recent audit events or processing runs
 

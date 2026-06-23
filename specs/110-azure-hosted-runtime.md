@@ -87,7 +87,11 @@ In local development:
 In `AZURE`, the Outlook inbox processing loop is triggered by Logic Apps.
 
 Required behavior:
-- The Logic App must run on a 30-second recurrence by default.
+- The Logic App workflow must deploy in `Disabled` state by default and require explicit manual enablement before intake scheduling starts.
+- The Logic App must run Monday through Friday during Central business hours.
+- The Logic App must use Azure Logic Apps timezone `Central Standard Time` so Central daylight and standard time transitions are handled by Azure.
+- The Logic App must start intake runs from 8:00 AM through 4:59 PM Central time and must not start runs at or after 5:00 PM Central time.
+- The Logic App schedule must remain constrained to Monday through Friday during Central business hours. The current deployable Azure workflow uses a weekly recurrence schedule at the top of each configured business hour.
 - The Logic App recurrence trigger must limit concurrent runs to 1.
 - Each recurrence must call the Function App intake endpoint.
 - Each Function invocation must pull and process at most one available Outlook inbox email.
@@ -149,7 +153,9 @@ Parameter files must contain placeholders only.
 - Graph mailbox credentials and Teams webhook URL are exposed to the Function App only through Key Vault references.
 - Azure nonprod database deployment applies the replayable schema and seed baseline and grants runtime access to the Function App managed identity.
 - Bicep validates successfully.
-- Logic App recurrence calls the Function intake endpoint every 30 seconds by default.
+- Logic App deployments create or update the workflow in `Disabled` state until an operator manually enables it.
+- Logic App recurrence calls the Function intake endpoint only Monday through Friday from 8:00 AM through 4:59 PM Central time.
+- Logic App recurrence uses a deployable weekly business-hours schedule and does not run on weekends or outside the configured 8:00 AM through 4:59 PM Central window.
 - Logic App recurrence does not start overlapping intake runs.
 - Function intake invocation returns an explicit empty/disabled/processed status.
 - Hosted Management process control reads the current Logic App workflow state and maps `Enabled` to `On` and `Disabled` to `Off`.

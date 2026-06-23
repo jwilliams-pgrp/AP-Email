@@ -23,7 +23,9 @@ function Assert-NoPlaceholderParameters {
         "00000000-0000-0000-0000-000000000000",
         "replace-with-entra-admin-display-name",
         "replace-with-deployment-name",
-        "replace-with-ap-intake-mailbox-upn"
+        "replace-with-ap-intake-mailbox-upn",
+        "replace-with-teams-team-name",
+        "replace-with-teams-channel-name"
     )
 
     foreach ($value in $blockedValues) {

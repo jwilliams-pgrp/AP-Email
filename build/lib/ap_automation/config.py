@@ -21,6 +21,7 @@ class RuntimeConfig:
     artifact_container: str
     artifact_account_url: str | None
     allow_local_dashboard_auth_bypass: bool
+    enable_outbound_email_forwarding: bool
 
     @property
     def is_azure(self) -> bool:
@@ -54,6 +55,10 @@ def load_runtime_config() -> RuntimeConfig:
         artifact_container=os.getenv("AP_ARTIFACT_CONTAINER", "ap-artifacts"),
         artifact_account_url=_artifact_account_url(),
         allow_local_dashboard_auth_bypass=_bool_env("AP_ALLOW_LOCAL_AUTH_BYPASS", default=app_env == AppEnv.LOCAL),
+        enable_outbound_email_forwarding=(
+            app_env == AppEnv.AZURE
+            and _bool_env("AP_ENABLE_OUTBOUND_EMAIL_FORWARDING", default=False)
+        ),
     )
 
 

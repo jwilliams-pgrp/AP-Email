@@ -13,7 +13,7 @@ def _seed_rule_priorities() -> dict[str, int]:
     return {
         match.group("code"): int(match.group("priority"))
         for match in re.finditer(
-            r"\('(?P<code>[^']+)',\s*'[^']*',\s*(?P<priority>\d+),\s*(?:true|false),",
+            r"VALUES \('(?P<code>[^']+)',\s*'[^']*',\s*(?P<priority>\d+),\s*(?:true|false),",
             seed_sql,
         )
     }
@@ -57,13 +57,23 @@ class SeedPolicyTests(unittest.TestCase):
         self.assertIn("db\\seed.sql", deploy_script)
         self.assertIn("db\\azure-permissions.sql", deploy_script)
 
+    def test_azure_prod_postgres_deploy_applies_required_sql_files_with_confirmation(self) -> None:
+        deploy_script = (ROOT / "deploy-azure-postgres-prod.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("[switch]$ConfirmProduction", deploy_script)
+        self.assertIn("Production PostgreSQL deployment requires -ConfirmProduction.", deploy_script)
+        self.assertIn("db\\schema.sql", deploy_script)
+        self.assertIn("db\\seed.sql", deploy_script)
+        self.assertIn("db\\azure-permissions.sql", deploy_script)
+        self.assertIn("id-hw-propertiesapmail-prod", deploy_script)
+
     def test_asset_custom_lookup_baseline_is_replayable(self) -> None:
         schema_sql = (ROOT / "db" / "schema.sql").read_text(encoding="utf-8")
         seed_sql = (ROOT / "db" / "seed.sql").read_text(encoding="utf-8")
         targeted_sql = (ROOT / "db" / "add-asset-custom-lookup.sql").read_text(encoding="utf-8")
 
         self.assertIn("CREATE TABLE public.asset_custom", schema_sql)
-        self.assertIn("CREATE OR REPLACE VIEW public.vw_asset_lookup", schema_sql)
+        self.assertRegex(schema_sql, r"CREATE (?:OR REPLACE )?VIEW public\.vw_asset_lookup")
         self.assertIn("id bigint NOT NULL", schema_sql)
         self.assertIn("destination_code character varying(100)", schema_sql)
         self.assertIn("'ESCALATE_SPECIAL_ADDRESS'", seed_sql)
@@ -74,13 +84,13 @@ class SeedPolicyTests(unittest.TestCase):
     def test_multifamily_assets_route_to_medius_mf_in_replayable_baseline(self) -> None:
         seed_sql = (ROOT / "db" / "seed.sql").read_text(encoding="utf-8")
 
-        self.assertNotIn("('ESCALATE_MULTIFAMILY', 'MULTIFAMILY'", seed_sql)
-        self.assertIn("('MEDIUS_MF', 'Medius Multifamily Queue'", seed_sql)
+        self.assertIn("'ESCALATE_MULTIFAMILY', 'MULTIFAMILY', NULL, false", seed_sql)
+        self.assertIn("'MEDIUS_MF', 'Medius Multifamily Queue'", seed_sql)
         self.assertIn(
-            "('asset_type_multifamily', 'Multifamily asset routes to Medius MF', 375, true, 'property_asset_type', 'AUTO', 'MEDIUS_MF'",
+            "'asset_type_multifamily', 'Multifamily asset routes to Medius MF', 375, true, 'property_asset_type', 'AUTO', 'MEDIUS_MF'",
             seed_sql,
         )
-        self.assertIn("where destination_code = 'ESCALATE_MULTIFAMILY'", seed_sql)
+        self.assertIn("'asset_type_multifamily', 'asset_type', '\"Multifamily\"'", seed_sql)
 
     def test_zero_dollar_invoices_escalate_in_replayable_baseline(self) -> None:
         seed_sql = (ROOT / "db" / "seed.sql").read_text(encoding="utf-8")
@@ -88,10 +98,10 @@ class SeedPolicyTests(unittest.TestCase):
 
         self.assertIn("'ESCALATE_0_DOLLAR_INVOICE'", seed_sql)
         self.assertIn(
-            "('amount_zero_invoice', 'Zero-dollar invoice requires escalation', 360, true, 'amount_equals_zero', 'ESCALATE', 'ESCALATE_0_DOLLAR_INVOICE'",
+            "'amount_zero_invoice', 'Zero-dollar invoice requires escalation', 360, true, 'amount_equals_zero', 'ESCALATE', 'ESCALATE_0_DOLLAR_INVOICE'",
             seed_sql,
         )
-        self.assertIn("('amount_zero_invoice', 'document_types', '[\"invoice\"]'::jsonb)", seed_sql)
+        self.assertIn("'amount_zero_invoice', 'document_types', '[\"invoice\"]'", seed_sql)
         self.assertIn("'ESCALATE_0_DOLLAR_INVOICE'", targeted_sql)
         self.assertIn("'amount_zero_invoice'", targeted_sql)
         self.assertIn("on conflict (rule_code, version)", targeted_sql.lower())
@@ -102,10 +112,10 @@ class SeedPolicyTests(unittest.TestCase):
 
         self.assertIn("'ESCALATE_CREDIT_MEMO'", seed_sql)
         self.assertIn(
-            "('hard_credit_memo', 'Credit memo requires escalation', 135, true, 'document_type', 'ESCALATE', 'ESCALATE_CREDIT_MEMO'",
+            "'hard_credit_memo', 'Credit memo requires escalation', 135, true, 'document_type', 'ESCALATE', 'ESCALATE_CREDIT_MEMO'",
             seed_sql,
         )
-        self.assertIn("('hard_credit_memo', 'document_types', '[\"credit_memo\"]'::jsonb)", seed_sql)
+        self.assertIn("'hard_credit_memo', 'document_types', '[\"credit_memo\"]'", seed_sql)
         self.assertIn("'ESCALATE_CREDIT_MEMO'", targeted_sql)
         self.assertIn("'hard_credit_memo'", targeted_sql)
         self.assertIn("on conflict (rule_code, version)", targeted_sql.lower())

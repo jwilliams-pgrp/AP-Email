@@ -718,7 +718,7 @@ Initial golden scenarios must cover:
 - Body-embedded invoices with no attachment, usable invoice facts, and preserved print/save/view/pay links are not normalized to `link_only_invoice`.
 - Confidence threshold comparisons are recorded for audit and observability.
 - Golden fixture tests cover every scenario listed in this spec.
-- Regression tests prove a FiberFirst-style utility or service bill labeled with statement-like text but containing invoice number `628308`, current amount due `172.89`, due date, service charges, and Hillwood Commons I / `HWC1` property facts is classified as `invoice` and routes `AUTO` to `MEDIUS_PROPERTIES` through `property_routing_match`.
+- Regression tests prove FiberFirst-style and municipal utility/service bills labeled with statement-like text but containing a single current payable bill, account/invoice number, current amount due, due date, service charges or service period, and service/bill-to/property facts are classified as `invoice`, not `statement`, and do not derive current-invoice past-due facts from attachment-only `Past Due Amount` labels.
 - Document Intelligence layout failures for required invoice attachments do not silently auto-route; unresolved property identity remains ESCALATEable.
 - Compatibility PDF evaluation outcomes are explicit and auditable with statuses `success`, `empty_text`, `corrupt_pdf`, `encrypted_pdf`, `extractor_unavailable`, and `low_quality`.
 - Non-PDF attachments are persisted and audit logged but are not content-evaluated.

@@ -24,7 +24,7 @@
       "value": "00000000-0000-0000-0000-000000000000"
     },
     "functionAuthAllowedAudience": {
-      "value": "api://00000000-0000-0000-0000-000000000000"
+      "value": "api://fef14fc0-c4f9-4c97-b900-8f31d44681c0"
     },
     "functionIdentityName": {
       "value": "id-example-nonprod"

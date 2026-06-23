@@ -32,6 +32,7 @@ const THROUGHPUT_CATEGORIES = [
   ["escalate", "Escalate"],
   ["failed", "Failed"],
   ["filed", "Filed"],
+  ["discarded", "Discarded"],
 ];
 const API_HTML_RESPONSE_MESSAGE =
   "Dashboard API returned HTML instead of JSON; verify the Static Web App is linked to the Function App backend.";
@@ -240,12 +241,11 @@ function Monitor({ range, openEmail }) {
     <main className="workspace">
       {summary.error && <Banner tone="bad" text={summary.error} />}
       <div className="kpiGrid">
-        <Kpi label="Processed" value={formatNumber(data.total_processed)} sub={`${range.startDate} to ${range.endDate}`} icon={Mail} />
+        <Kpi label="Processed" value={formatNumber(data.total_processed)} sub={`${range.startDate} to ${range.endDate}`} tone="neutral" icon={Mail} />
         <Kpi label="Automated" value={formatOutcomeMetric(data, "AUTO")} sub="auto routed" tone="green" icon={CheckCircle2} />
         <Kpi label="Escalate" value={formatOutcomeMetric(data, "ESCALATE")} sub={`${formatNumber(data.open_escalate_count)} open escalation items`} tone="amber" icon={AlertTriangle} />
         <Kpi label="Filed" value={formatOutcomeMetric(data, "FILE")} sub="filed locally" tone="blue" icon={History} />
-        <Kpi label="Flagged" value={formatOutcomeMetric(data, "FLAG")} sub="critical or misdirected" tone="red" icon={AlertTriangle} />
-        <Kpi label="Discarded" value={formatOutcomeMetric(data, "DISCARD")} sub="logged no-action emails" tone="blue" icon={Mail} />
+        <Kpi label="Discarded" value={formatOutcomeMetric(data, "DISCARD")} sub="logged no-action emails" tone="discardTone" icon={Mail} />
         <Kpi label="Failed runs" value={formatRunMetric(data, "failed")} sub="failed attempts" tone="red" icon={Activity} />
         <Kpi label="Avg processing" value={data.avg_processing_seconds ? `${data.avg_processing_seconds}s` : "-"} sub="completed runs only" tone="violet" icon={RefreshCw} />
       </div>

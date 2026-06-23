@@ -21,10 +21,10 @@
       "value": "hw-propertiesapmail-prod"
     },
     "functionAuthClientId": {
-      "value": "00000000-0000-0000-0000-000000000000"
+      "value": "fef14fc0-c4f9-4c97-b900-8f31d44681c0"
     },
     "functionAuthAllowedAudience": {
-      "value": "api://00000000-0000-0000-0000-000000000000"
+      "value": "api://fef14fc0-c4f9-4c97-b900-8f31d44681c0"
     },
     "functionIdentityName": {
       "value": "id-hw-propertiesapmail-prod"
@@ -57,34 +57,34 @@
       "value": "proj-default"
     },
     "entraAdminObjectId": {
-      "value": "00000000-0000-0000-0000-000000000000"
+      "value": "e14db939-1792-4e58-bc08-626c7e9e2605"
     },
     "entraAdminName": {
-      "value": "replace-with-entra-admin-display-name"
+      "value": "Jeremy.Williams@hillwood.com"
     },
     "azureOpenAiDeployment": {
-      "value": "replace-with-deployment-name"
+      "value": "gpt-5.4-mini"
     },
     "documentIntelligenceEndpoint": {
       "value": "https://fdnry-hw-propertiesapmail-prod.cognitiveservices.azure.com"
     },
     "mailboxUserPrincipalName": {
-      "value": "replace-with-ap-intake-mailbox-upn"
+      "value": "propertiesap@hillwood.com"
     },
     "teamsTeamNamePropertiesAp": {
-      "value": "replace-with-teams-team-name"
+      "value": "Properties AP"
     },
     "teamsChannelNamePropertiesAp": {
-      "value": "replace-with-teams-channel-name"
+      "value": "Properties AP"
     },
     "intakePollingIntervalSeconds": {
-      "value": 30
+      "value": 600
     },
     "intakeConcurrencyRuns": {
       "value": 1
     },
     "processGraphIntake": {
-      "value": false
+      "value": true
     },
     "enableOutboundEmailForwarding": {
       "value": true
@@ -92,7 +92,7 @@
     "tags": {
       "value": {
         "environment": "PROD",
-        "resource-group": "rg0hw-propertiesapmail-prod",
+        "resource-group": "rg-hw-propertiesapmail-prod",
         "workload": "properties-ap-mail"
       }
     }

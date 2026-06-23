@@ -47,7 +47,7 @@ param functionStorageAccountName string
 @description('Name of the Storage Account used for AP artifacts.')
 param artifactStorageAccountName string
 
-@description('Name of the existing Key Vault used by this environment.')
+@description('Name of the Key Vault used by this environment.')
 param keyVaultName string
 
 @description('Name of the Azure Database for PostgreSQL Flexible Server.')
@@ -86,7 +86,7 @@ param teamsTeamNamePropertiesAp string
 @description('Microsoft Teams channel name used for Properties AP escalation notifications.')
 param teamsChannelNamePropertiesAp string
 
-@description('Logic App polling interval in seconds.')
+@description('Logic App polling interval in seconds during the configured business-hours schedule.')
 @minValue(30)
 param intakePollingIntervalSeconds int = 30
 
@@ -218,8 +218,31 @@ resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' 
   tags: commonTags
 }
 
-resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
+resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   name: keyVaultName
+  location: location
+  tags: commonTags
+  properties: {
+    tenantId: subscription().tenantId
+    sku: {
+      family: 'A'
+      name: 'standard'
+    }
+    enableRbacAuthorization: true
+    enabledForDeployment: false
+    enabledForDiskEncryption: false
+    enabledForTemplateDeployment: false
+    enableSoftDelete: true
+    softDeleteRetentionInDays: 90
+    enablePurgeProtection: true
+    publicNetworkAccess: 'Enabled'
+    networkAcls: {
+      bypass: 'AzureServices'
+      defaultAction: 'Allow'
+      ipRules: []
+      virtualNetworkRules: []
+    }
+  }
 }
 
 resource foundry 'Microsoft.CognitiveServices/accounts@2025-09-01' = {
@@ -228,7 +251,7 @@ resource foundry 'Microsoft.CognitiveServices/accounts@2025-09-01' = {
   kind: 'AIServices'
   tags: commonTags
   identity: {
-    type: 'UserAssigned'
+    type: 'SystemAssigned, UserAssigned'
     userAssignedIdentities: {
       '${identity.id}': {}
     }
@@ -238,11 +261,7 @@ resource foundry 'Microsoft.CognitiveServices/accounts@2025-09-01' = {
   }
   properties: {
     allowProjectManagement: true
-    associatedProjects: [
-      foundryProjectName
-    ]
     customSubDomainName: foundryAccountName
-    defaultProject: foundryProjectName
     disableLocalAuth: true
     networkAcls: {
       defaultAction: 'Allow'
@@ -250,17 +269,6 @@ resource foundry 'Microsoft.CognitiveServices/accounts@2025-09-01' = {
       virtualNetworkRules: []
     }
     publicNetworkAccess: 'Enabled'
-  }
-}
-
-resource foundryProject 'Microsoft.CognitiveServices/accounts/projects@2025-09-01' = {
-  parent: foundry
-  name: foundryProjectName
-  location: location
-  tags: commonTags
-  properties: {
-    description: 'Default AP Automation Foundry project.'
-    displayName: foundryProjectName
   }
 }
 
@@ -415,25 +423,69 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
     type: 'SystemAssigned'
   }
   properties: {
-    state: processGraphIntake ? 'Enabled' : 'Disabled'
+    state: 'Disabled'
     definition: {
       '$schema': 'https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#'
       contentVersion: '1.0.0.0'
       parameters: {}
       triggers: {
-        every_30_seconds: {
-          type: 'Recurrence'
+        business_hours_intake: {
           recurrence: {
-            frequency: 'Second'
-            interval: intakePollingIntervalSeconds
+            frequency: 'Day'
+            interval: 1
+            schedule: {
+              hours: [
+                8
+                9
+                10
+                11
+                12
+                13
+                14
+                15
+                16
+              ]
+              minutes: [
+                0
+                10
+                20
+                30
+                40
+                50
+              ]
+            }
+            timeZone: 'Central Standard Time'
           }
           evaluatedRecurrence: {
-            frequency: 'Second'
-            interval: intakePollingIntervalSeconds
+            frequency: 'Day'
+            interval: 1
+            schedule: {
+              hours: [
+                8
+                9
+                10
+                11
+                12
+                13
+                14
+                15
+                16
+              ]
+              minutes: [
+                0
+                10
+                20
+                30
+                40
+                50
+              ]
+            }
+            timeZone: 'Central Standard Time'
           }
+          type: 'Recurrence'
           runtimeConfiguration: {
             concurrency: {
-              runs: intakeConcurrencyRuns
+              runs: 1
             }
           }
         }
@@ -576,5 +628,6 @@ output artifactStorageAccountName string = artifactStorage.name
 output postgresServerName string = postgres.name
 output keyVaultName string = keyVault.name
 output foundryAccountName string = foundry.name
-output foundryProjectName string = foundryProject.name
+output foundryProjectName string = foundryProjectName
 output logicAppName string = logicApp.name
+output configuredIntakePollingIntervalSeconds int = intakePollingIntervalSeconds

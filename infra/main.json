@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.43.8.12551",
-      "templateHash": "7181115452356334187"
+      "templateHash": "17964557239729549019"
     }
   },
   "parameters": {
@@ -106,7 +106,7 @@
     "keyVaultName": {
       "type": "string",
       "metadata": {
-        "description": "Name of the existing Key Vault used by this environment."
+        "description": "Name of the Key Vault used by this environment."
       }
     },
     "postgresServerName": {
@@ -188,7 +188,7 @@
       "defaultValue": 30,
       "minValue": 30,
       "metadata": {
-        "description": "Logic App polling interval in seconds."
+        "description": "Logic App polling interval in seconds during the configured business-hours schedule."
       }
     },
     "intakeConcurrencyRuns": {
@@ -204,6 +204,13 @@
       "defaultValue": true,
       "metadata": {
         "description": "Enable timer-triggered Graph intake processing."
+      }
+    },
+    "enableOutboundEmailForwarding": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Enable outbound email forwarding for routing destinations where send_email is true. Keep false outside PROD unless explicitly approved."
       }
     },
     "postgresSkuName": {
@@ -245,6 +252,7 @@
     "keyVaultSecretsUserRoleId": "4633458b-17de-408a-b874-0445c86b69e6",
     "monitoringMetricsPublisherRoleId": "3913510d-42f4-4e42-8a64-420c390055eb",
     "cognitiveServicesUserRoleId": "a97b65f3-24c7-4388-baec-2e87135dc908",
+    "logicAppContributorRoleId": "87a39d53-fc1b-424a-814c-f7e04687dc9e",
     "foundryEndpoint": "[format('https://{0}.cognitiveservices.azure.com', parameters('foundryAccountName'))]"
   },
   "resources": [
@@ -278,8 +286,10 @@
         "TEAMS_TEAM_NAME_PROPERTIES_AP": "[parameters('teamsTeamNamePropertiesAp')]",
         "TEAMS_CHANNEL_NAME_PROPERTIES_AP": "[parameters('teamsChannelNamePropertiesAp')]",
         "AP_PROCESS_GRAPH_INTAKE": "[string(parameters('processGraphIntake'))]",
+        "AP_ENABLE_OUTBOUND_EMAIL_FORWARDING": "[string(parameters('enableOutboundEmailForwarding'))]",
         "KEY_VAULT_NAME": "[parameters('keyVaultName')]",
         "LOGIC_APP_PRINCIPAL_ID": "[reference(resourceId('Microsoft.Logic/workflows', parameters('logicAppName')), '2019-05-01', 'full').identity.principalId]",
+        "LOGIC_APP_RESOURCE_ID": "[resourceId('Microsoft.Logic/workflows', parameters('logicAppName'))]",
         "FUNCTION_AUTH_ALLOWED_AUDIENCE": "[parameters('functionAuthAllowedAudience')]"
       },
       "dependsOn": [
@@ -288,6 +298,7 @@
         "[resourceId('Microsoft.Web/sites', parameters('functionAppName'))]",
         "[resourceId('Microsoft.Storage/storageAccounts', parameters('functionStorageAccountName'))]",
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('functionIdentityName'))]",
+        "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]",
         "[resourceId('Microsoft.Logic/workflows', parameters('logicAppName'))]",
         "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('postgresServerName'))]"
       ]
@@ -403,6 +414,34 @@
       "tags": "[variables('commonTags')]"
     },
     {
+      "type": "Microsoft.KeyVault/vaults",
+      "apiVersion": "2023-07-01",
+      "name": "[parameters('keyVaultName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('commonTags')]",
+      "properties": {
+        "tenantId": "[subscription().tenantId]",
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "enableRbacAuthorization": true,
+        "enabledForDeployment": false,
+        "enabledForDiskEncryption": false,
+        "enabledForTemplateDeployment": false,
+        "enableSoftDelete": true,
+        "softDeleteRetentionInDays": 90,
+        "enablePurgeProtection": true,
+        "publicNetworkAccess": "Enabled",
+        "networkAcls": {
+          "bypass": "AzureServices",
+          "defaultAction": "Allow",
+          "ipRules": [],
+          "virtualNetworkRules": []
+        }
+      }
+    },
+    {
       "type": "Microsoft.CognitiveServices/accounts",
       "apiVersion": "2025-09-01",
       "name": "[parameters('foundryAccountName')]",
@@ -410,7 +449,7 @@
       "kind": "AIServices",
       "tags": "[variables('commonTags')]",
       "identity": {
-        "type": "UserAssigned",
+        "type": "SystemAssigned, UserAssigned",
         "userAssignedIdentities": {
           "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('functionIdentityName')))]": {}
         }
@@ -420,11 +459,7 @@
       },
       "properties": {
         "allowProjectManagement": true,
-        "associatedProjects": [
-          "[parameters('foundryProjectName')]"
-        ],
         "customSubDomainName": "[parameters('foundryAccountName')]",
-        "defaultProject": "[parameters('foundryProjectName')]",
         "disableLocalAuth": true,
         "networkAcls": {
           "defaultAction": "Allow",
@@ -435,20 +470,6 @@
       },
       "dependsOn": [
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('functionIdentityName'))]"
-      ]
-    },
-    {
-      "type": "Microsoft.CognitiveServices/accounts/projects",
-      "apiVersion": "2025-09-01",
-      "name": "[format('{0}/{1}', parameters('foundryAccountName'), parameters('foundryProjectName'))]",
-      "location": "[parameters('location')]",
-      "tags": "[variables('commonTags')]",
-      "properties": {
-        "description": "Default AP Automation Foundry project.",
-        "displayName": "[parameters('foundryProjectName')]"
-      },
-      "dependsOn": [
-        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName'))]"
       ]
     },
     {
@@ -585,21 +606,69 @@
         "type": "SystemAssigned"
       },
       "properties": {
-        "state": "[if(parameters('processGraphIntake'), 'Enabled', 'Disabled')]",
+        "state": "Disabled",
         "definition": {
           "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
           "contentVersion": "1.0.0.0",
           "parameters": {},
           "triggers": {
-            "every_30_seconds": {
+            "business_hours_intake": {
               "type": "Recurrence",
               "recurrence": {
-                "frequency": "Second",
-                "interval": "[parameters('intakePollingIntervalSeconds')]"
+                "frequency": "Week",
+                "interval": 1,
+                "schedule": {
+                  "hours": [
+                    8,
+                    9,
+                    10,
+                    11,
+                    12,
+                    13,
+                    14,
+                    15,
+                    16
+                  ],
+                  "weekDays": [
+                    "Monday",
+                    "Tuesday",
+                    "Wednesday",
+                    "Thursday",
+                    "Friday"
+                  ],
+                  "minutes": [
+                    0
+                  ]
+                },
+                "timeZone": "Central Standard Time"
               },
               "evaluatedRecurrence": {
-                "frequency": "Second",
-                "interval": "[parameters('intakePollingIntervalSeconds')]"
+                "frequency": "Week",
+                "interval": 1,
+                "schedule": {
+                  "hours": [
+                    8,
+                    9,
+                    10,
+                    11,
+                    12,
+                    13,
+                    14,
+                    15,
+                    16
+                  ],
+                  "weekDays": [
+                    "Monday",
+                    "Tuesday",
+                    "Wednesday",
+                    "Thursday",
+                    "Friday"
+                  ],
+                  "minutes": [
+                    0
+                  ]
+                },
+                "timeZone": "Central Standard Time"
               },
               "runtimeConfiguration": {
                 "concurrency": {
@@ -733,7 +802,8 @@
         "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsUserRoleId'))]"
       },
       "dependsOn": [
-        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('functionIdentityName'))]"
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('functionIdentityName'))]",
+        "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]"
       ]
     },
     {
@@ -764,6 +834,21 @@
       "dependsOn": [
         "[resourceId('Microsoft.Insights/components', parameters('appInsightsName'))]",
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('functionIdentityName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.Logic/workflows', parameters('logicAppName'))]",
+      "name": "[guid(resourceId('Microsoft.Logic/workflows', parameters('logicAppName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('functionIdentityName')), variables('logicAppContributorRoleId'))]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('functionIdentityName')), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('logicAppContributorRoleId'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('functionIdentityName'))]",
+        "[resourceId('Microsoft.Logic/workflows', parameters('logicAppName'))]"
       ]
     }
   ],
@@ -811,6 +896,10 @@
     "logicAppName": {
       "type": "string",
       "value": "[parameters('logicAppName')]"
+    },
+    "configuredIntakePollingIntervalSeconds": {
+      "type": "int",
+      "value": "[parameters('intakePollingIntervalSeconds')]"
     }
   }
 }

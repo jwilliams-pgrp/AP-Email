@@ -79,7 +79,8 @@ Monitor endpoints must return data shaped for business monitoring:
 - totals by outcome
 - automation, ESCALATE, file, flag, discard, and failed-run rates
 - current ESCALATE folder email count
-- daily throughput by monitor category, including automated, ESCALATE, filed decisions, and failed audit runs
+- final email-level monitor metrics from `decisions` must use only rows where `document_item_id is null`
+- daily throughput by monitor category, including automated, ESCALATE, filed, discarded decisions, and failed audit runs
 - top ESCALATE reasons
 - top routing destinations
 - confidence buckets

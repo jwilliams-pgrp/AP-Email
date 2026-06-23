@@ -18,6 +18,58 @@ def test_nonprod_deploy_packages_local_package_as_wheel() -> None:
     assert ".python_packages" not in script
 
 
+def test_prod_deploy_packages_local_package_as_wheel() -> None:
+    script = (ROOT / "deploy-azure-apps-prod.ps1").read_text(encoding="utf-8")
+
+    assert "python -m pip wheel --no-deps --wheel-dir $wheelStage $repoRoot" in script
+    assert 'Add-Content -LiteralPath (Join-Path $functionStage "requirements.txt") -Value "wheels/$($localPackageWheels[0].Name)"' in script
+    assert '$entryName = $relativePath -replace "\\\\", "/"' in script
+    assert "New-FunctionZipFromDirectory -SourceDirectory $functionStage -DestinationPath $functionZip" in script
+    assert "--build-remote true" in script
+    assert ".deploy\\prod" in script
+
+
+def test_prod_app_deploy_requires_confirmation_and_key_vault_secrets() -> None:
+    script = (ROOT / "deploy-azure-apps-prod.ps1").read_text(encoding="utf-8")
+
+    assert "[switch]$ConfirmProduction" in script
+    assert "Production app deployment requires -ConfirmProduction." in script
+    assert "Assert-KeyVaultSecretsExist -VaultName $keyVaultName" in script
+    for secret_name in [
+        "AZURE-CLIENT-ID-MAIL",
+        "AZURE-CLIENT-SECRET-MAIL",
+        "AZURE-TENANT-ID",
+        "TEAMS-WEBHOOK-URL-PROPERTIES-AP",
+    ]:
+        assert secret_name in script
+
+
+def test_prod_infra_deploy_blocks_known_placeholders() -> None:
+    script = (ROOT / "deploy-azure-prod.ps1").read_text(encoding="utf-8")
+
+    for placeholder in [
+        "00000000-0000-0000-0000-000000000000",
+        "replace-with-entra-admin-display-name",
+        "replace-with-deployment-name",
+        "replace-with-ap-intake-mailbox-upn",
+        "replace-with-teams-team-name",
+        "replace-with-teams-channel-name",
+    ]:
+        assert placeholder in script
+    assert "Production deployment requires -ConfirmProduction." in script
+
+
+def test_bicep_creates_key_vault_for_environment() -> None:
+    bicep = (ROOT / "infra" / "main.bicep").read_text(encoding="utf-8")
+
+    assert "resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {" in bicep
+    assert "resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' existing" not in bicep
+    assert "enableRbacAuthorization: true" in bicep
+    assert "enableSoftDelete: true" in bicep
+    assert "enablePurgeProtection: true" in bicep
+    assert "softDeleteRetentionInDays: 90" in bicep
+
+
 def test_function_app_does_not_bootstrap_vendored_package_paths() -> None:
     function_app = (ROOT / "function_app.py").read_text(encoding="utf-8")
 
@@ -87,6 +139,36 @@ def test_function_app_can_manage_logic_app_state() -> None:
     assert "scope: logicApp" in bicep
 
 
+def test_logic_app_deploys_disabled_until_manual_enablement() -> None:
+    bicep = (ROOT / "infra" / "main.bicep").read_text(encoding="utf-8")
+    template = json.loads((ROOT / "infra" / "main.json").read_text(encoding="utf-8"))
+    logic_app = next(resource for resource in template["resources"] if resource["type"] == "Microsoft.Logic/workflows")
+
+    assert "state: 'Disabled'" in bicep
+    assert "state: processGraphIntake ? 'Enabled' : 'Disabled'" not in bicep
+    assert logic_app["properties"]["state"] == "Disabled"
+
+
+def test_logic_app_intake_schedule_uses_business_hours_and_environment_intervals() -> None:
+    bicep = (ROOT / "infra" / "main.bicep").read_text(encoding="utf-8")
+    nonprod = json.loads((ROOT / "infra" / "main.parameters.nonprod.json").read_text(encoding="utf-8"))["parameters"]
+    prod = json.loads((ROOT / "infra" / "main.parameters.prod.json").read_text(encoding="utf-8"))["parameters"]
+
+    assert "business_hours_intake" in bicep
+    assert "frequency: 'Week'" in bicep
+    assert "interval: 1" in bicep
+    assert "minutes:" in bicep
+    assert "timeZone: 'Central Standard Time'" in bicep
+    assert all(f"'{day}'" in bicep for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
+    assert "'Saturday'" not in bicep
+    assert "'Sunday'" not in bicep
+    assert all(f"\n                {hour}\n" in bicep for hour in range(8, 17))
+    assert "\n                17\n" not in bicep
+    assert "runs: intakeConcurrencyRuns" in bicep
+    assert nonprod["intakePollingIntervalSeconds"]["value"] == 30
+    assert prod["intakePollingIntervalSeconds"]["value"] == 600
+
+
 def test_function_app_config_exposes_outbound_email_forwarding_gate() -> None:
     bicep = (ROOT / "infra" / "main.bicep").read_text(encoding="utf-8")
     nonprod = json.loads((ROOT / "infra" / "main.parameters.nonprod.json").read_text(encoding="utf-8"))["parameters"]
@@ -150,6 +232,17 @@ def test_function_host_keeps_default_api_route_prefix() -> None:
 
 def test_nonprod_deploy_validates_static_web_app_backend() -> None:
     script = (ROOT / "deploy-azure-apps-nonprod.ps1").read_text(encoding="utf-8")
+
+    assert "az staticwebapp backends show" in script
+    assert "--name $staticWebAppName" in script
+    assert "--resource-group $ResourceGroup" in script
+    assert "$linkedBackendRecord.backendResourceId" in script
+    assert "$linkedBackendRecord.properties.backendResourceId" in script
+    assert "$expectedFunctionAppId" in script
+
+
+def test_prod_deploy_validates_static_web_app_backend() -> None:
+    script = (ROOT / "deploy-azure-apps-prod.ps1").read_text(encoding="utf-8")
 
     assert "az staticwebapp backends show" in script
     assert "--name $staticWebAppName" in script

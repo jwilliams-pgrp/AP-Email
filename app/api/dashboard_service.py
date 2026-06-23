@@ -225,6 +225,7 @@ def monitor_summary(start_date: str | None = None, end_date: str | None = None) 
             select d.outcome::text as outcome, count(*)::int as count
             from decisions d
             where d.created_at >= %s and d.created_at < %s
+              and d.document_item_id is null
             group by d.outcome
             """,
             (start, end_exclusive),
@@ -255,6 +256,7 @@ def monitor_summary(start_date: str | None = None, end_date: str | None = None) 
               count(*) filter (where confidence < 0.90)::int as low
             from decisions
             where created_at >= %s and created_at < %s
+              and document_item_id is null
             """,
             (start, end_exclusive),
         ).fetchone()
@@ -296,7 +298,9 @@ def monitor_throughput(start_date: str | None = None, end_date: str | None = Non
             """
             select date_trunc('day', d.created_at)::date as day, d.outcome::text as outcome, count(*)::int as count
             from decisions d
-            where d.created_at >= %s and d.created_at < %s and d.outcome in ('AUTO', 'ESCALATE', 'FILE')
+            where d.created_at >= %s and d.created_at < %s
+              and d.document_item_id is null
+              and d.outcome in ('AUTO', 'ESCALATE', 'FILE', 'DISCARD')
             group by 1, 2
             order by 1
             """,
@@ -313,14 +317,14 @@ def monitor_throughput(start_date: str | None = None, end_date: str | None = Non
             (start, end_exclusive),
         ).fetchall()
     by_day: dict[str, dict[str, Any]] = {}
-    outcome_to_category = {"AUTO": "automated", "ESCALATE": "escalate", "FILE": "filed"}
+    outcome_to_category = {"AUTO": "automated", "ESCALATE": "escalate", "FILE": "filed", "DISCARD": "discarded"}
     for row in decision_rows:
         key = row["day"].isoformat()
-        by_day.setdefault(key, {"day": key, "automated": 0, "escalate": 0, "failed": 0, "filed": 0})
+        by_day.setdefault(key, {"day": key, "automated": 0, "escalate": 0, "failed": 0, "filed": 0, "discarded": 0})
         by_day[key][outcome_to_category[row["outcome"]]] = row["count"]
     for row in failed_rows:
         key = row["day"].isoformat()
-        by_day.setdefault(key, {"day": key, "automated": 0, "escalate": 0, "failed": 0, "filed": 0})
+        by_day.setdefault(key, {"day": key, "automated": 0, "escalate": 0, "failed": 0, "filed": 0, "discarded": 0})
         by_day[key]["failed"] = row["count"]
     return [by_day[key] for key in sorted(by_day)]
 
@@ -333,7 +337,9 @@ def monitor_escalate_reasons(start_date: str | None = None, end_date: str | None
             select coalesce(rq.reason, d.reason) as reason, count(*)::int as count
             from decisions d
             left join escalate_queue rq on rq.decision_id = d.decision_id
-            where d.created_at >= %s and d.created_at < %s and d.outcome in ('ESCALATE', 'FLAG')
+            where d.created_at >= %s and d.created_at < %s
+              and d.document_item_id is null
+              and d.outcome in ('ESCALATE', 'FLAG')
             group by 1
             order by count(*) desc, reason
             limit 10
@@ -354,6 +360,7 @@ def monitor_destinations(start_date: str | None = None, end_date: str | None = N
             from decisions d
             left join routing_destinations rd on rd.destination_code = d.destination_code
             where d.created_at >= %s and d.created_at < %s
+              and d.document_item_id is null
             group by 1, 2
             order by count(*) desc, display_name
             limit 10

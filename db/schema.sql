@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict jVhKTxV59XXm4MB1OCWI1jFUJKWD0cKqj9hc7UI3FKEbL86Md5WCBG2fP9dZ3QR
+\restrict E1GyjeUZqbHlvfeeHugPAR50EHeMSOnQktnm6Y9KAoROAVTYwP6XNewDfRqoUJP
 
 -- Dumped from database version 18.3
 -- Dumped by pg_dump version 18.3
@@ -87,6 +87,11 @@ CREATE TABLE public.asset (
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 
+
+--
+-- Name: asset_custom; Type: TABLE; Schema: public; Owner: -
+--
+
 CREATE TABLE public.asset_custom (
     id bigint NOT NULL,
     asset_alias character varying(255),
@@ -96,6 +101,25 @@ CREATE TABLE public.asset_custom (
     comment text,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
+
+
+--
+-- Name: asset_custom_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.asset_custom_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: asset_custom_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.asset_custom_id_seq OWNED BY public.asset_custom.id;
 
 
 --
@@ -115,15 +139,6 @@ CREATE SEQUENCE public.asset_id_seq
 --
 
 ALTER SEQUENCE public.asset_id_seq OWNED BY public.asset.id;
-
-CREATE SEQUENCE public.asset_custom_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-ALTER SEQUENCE public.asset_custom_id_seq OWNED BY public.asset_custom.id;
 
 
 --
@@ -421,6 +436,49 @@ CREATE TABLE public.runtime_config (
 
 
 --
+-- Name: vw_asset_lookup; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.vw_asset_lookup AS
+ SELECT 'asset'::text AS asset_source,
+    ('asset:'::text || (a.id)::text) AS asset_lookup_id,
+    (a.id)::text AS source_id,
+    a.asset_alias,
+    a.asset_name,
+    a.address,
+    a.tenants,
+    a.asset_type,
+    a.ownership,
+    a.market_name,
+    a.market_area,
+    NULL::text AS comment,
+    o.destination AS destination_code,
+    rd.active AS destination_active,
+    a.created_at
+   FROM ((public.asset a
+     LEFT JOIN public.ownership o ON (((a.ownership)::text = (o.ownership)::text)))
+     LEFT JOIN public.routing_destinations rd ON ((rd.destination_code = (o.destination)::text)))
+UNION ALL
+ SELECT 'asset_custom'::text AS asset_source,
+    ('asset_custom:'::text || (ac.id)::text) AS asset_lookup_id,
+    (ac.id)::text AS source_id,
+    ac.asset_alias,
+    ac.asset_name,
+    ac.address,
+    NULL::text AS tenants,
+    NULL::character varying(100) AS asset_type,
+    NULL::character varying(255) AS ownership,
+    NULL::character varying(255) AS market_name,
+    NULL::character varying(255) AS market_area,
+    ac.comment,
+    (ac.destination_code)::text AS destination_code,
+    rd.active AS destination_active,
+    ac.created_at
+   FROM (public.asset_custom ac
+     LEFT JOIN public.routing_destinations rd ON ((rd.destination_code = (ac.destination_code)::text)));
+
+
+--
 -- Name: workflow_rule_conditions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -485,6 +543,11 @@ CREATE TABLE public.workflow_rules (
 
 ALTER TABLE ONLY public.asset ALTER COLUMN id SET DEFAULT nextval('public.asset_id_seq'::regclass);
 
+
+--
+-- Name: asset_custom id; Type: DEFAULT; Schema: public; Owner: -
+--
+
 ALTER TABLE ONLY public.asset_custom ALTER COLUMN id SET DEFAULT nextval('public.asset_custom_id_seq'::regclass);
 
 
@@ -497,14 +560,19 @@ ALTER TABLE ONLY public.actions
 
 
 --
+-- Name: asset_custom asset_custom_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.asset_custom
+    ADD CONSTRAINT asset_custom_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: asset asset_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.asset
     ADD CONSTRAINT asset_pkey PRIMARY KEY (id);
-
-ALTER TABLE ONLY public.asset_custom
-    ADD CONSTRAINT asset_custom_pkey PRIMARY KEY (id);
 
 
 --
@@ -712,20 +780,40 @@ CREATE INDEX actions_document_item_idx ON public.actions USING btree (document_i
 
 CREATE INDEX asset_address_trgm_idx ON public.asset USING gin (lower(COALESCE(address, ''::text)) public.gin_trgm_ops);
 
-CREATE INDEX asset_custom_address_trgm_idx ON public.asset_custom USING gin (lower(COALESCE(address, ''::text)) public.gin_trgm_ops);
-
-CREATE INDEX asset_custom_alias_trgm_idx ON public.asset_custom USING gin (lower(regexp_replace((COALESCE(asset_alias, ''::character varying))::text, '[^a-zA-Z0-9]+'::text, ''::text, 'g'::text)) public.gin_trgm_ops);
-
-CREATE INDEX asset_custom_destination_code_idx ON public.asset_custom USING btree (destination_code);
-
-CREATE INDEX asset_custom_name_trgm_idx ON public.asset_custom USING gin (lower((COALESCE(asset_name, ''::character varying))::text) public.gin_trgm_ops);
-
 
 --
 -- Name: asset_alias_trgm_idx; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX asset_alias_trgm_idx ON public.asset USING gin (lower(regexp_replace((COALESCE(asset_alias, ''::character varying))::text, '[^a-zA-Z0-9]+'::text, ''::text, 'g'::text)) public.gin_trgm_ops);
+
+
+--
+-- Name: asset_custom_address_trgm_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX asset_custom_address_trgm_idx ON public.asset_custom USING gin (lower(COALESCE(address, ''::text)) public.gin_trgm_ops);
+
+
+--
+-- Name: asset_custom_alias_trgm_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX asset_custom_alias_trgm_idx ON public.asset_custom USING gin (lower(regexp_replace((COALESCE(asset_alias, ''::character varying))::text, '[^a-zA-Z0-9]+'::text, ''::text, 'g'::text)) public.gin_trgm_ops);
+
+
+--
+-- Name: asset_custom_destination_code_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX asset_custom_destination_code_idx ON public.asset_custom USING btree (destination_code);
+
+
+--
+-- Name: asset_custom_name_trgm_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX asset_custom_name_trgm_idx ON public.asset_custom USING gin (lower((COALESCE(asset_name, ''::character varying))::text) public.gin_trgm_ops);
 
 
 --
@@ -747,44 +835,6 @@ CREATE INDEX asset_ownership_idx ON public.asset USING btree (ownership);
 --
 
 CREATE INDEX asset_tenants_trgm_idx ON public.asset USING gin (lower(COALESCE(tenants, ''::text)) public.gin_trgm_ops);
-
-CREATE OR REPLACE VIEW public.vw_asset_lookup AS
- SELECT 'asset'::text AS asset_source,
-    ('asset:'::text || (a.id)::text) AS asset_lookup_id,
-    (a.id)::text AS source_id,
-    a.asset_alias,
-    a.asset_name,
-    a.address,
-    a.tenants,
-    a.asset_type,
-    a.ownership,
-    a.market_name,
-    a.market_area,
-    NULL::text AS comment,
-    o.destination AS destination_code,
-    rd.active AS destination_active,
-    a.created_at
-   FROM ((public.asset a
-     LEFT JOIN public.ownership o ON (((a.ownership)::text = (o.ownership)::text)))
-     LEFT JOIN public.routing_destinations rd ON ((rd.destination_code = o.destination)))
-UNION ALL
- SELECT 'asset_custom'::text AS asset_source,
-    ('asset_custom:'::text || (ac.id)::text) AS asset_lookup_id,
-    (ac.id)::text AS source_id,
-    ac.asset_alias,
-    ac.asset_name,
-    ac.address,
-    NULL::text AS tenants,
-    NULL::character varying(100) AS asset_type,
-    NULL::character varying(255) AS ownership,
-    NULL::character varying(255) AS market_name,
-    NULL::character varying(255) AS market_area,
-    ac.comment,
-    (ac.destination_code)::text AS destination_code,
-    rd.active AS destination_active,
-    ac.created_at
-   FROM (public.asset_custom ac
-     LEFT JOIN public.routing_destinations rd ON ((rd.destination_code = (ac.destination_code)::text)));
 
 
 --
@@ -981,6 +1031,7 @@ ALTER TABLE ONLY public.audit_runs
 
 ALTER TABLE ONLY public.audit_steps
     ADD CONSTRAINT audit_steps_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.audit_runs(run_id) ON DELETE CASCADE;
+
 
 --
 -- Name: decisions decisions_destination_code_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
@@ -1186,4 +1237,4 @@ ALTER TABLE ONLY public.workflow_rules
 -- PostgreSQL database dump complete
 --
 
-\unrestrict jVhKTxV59XXm4MB1OCWI1jFUJKWD0cKqj9hc7UI3FKEbL86Md5WCBG2fP9dZ3QR
+\unrestrict E1GyjeUZqbHlvfeeHugPAR50EHeMSOnQktnm6Y9KAoROAVTYwP6XNewDfRqoUJP

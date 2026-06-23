@@ -17,3 +17,4 @@ infra/main.parameters.local.json
 ~$*
 
 .databricks
+reference/

@@ -1,33 +1,24 @@
 -- Azure PostgreSQL runtime permissions for the AP Automation Function App.
--- Run with psql and pass: -v function_identity_name='id-hw-propertiesapmail-nonprod'
+-- Register the managed identity as an Entra principal in the postgres database before running this file.
+-- Run with psql against the application database and pass: -v function_identity_name='id-hw-propertiesapmail-nonprod'
 
 \set ON_ERROR_STOP on
 
-select format('select pgaadauth_create_principal(%L, false, false);', :'function_identity_name')
+select format('select 1 from pg_roles where rolname = %L;', :'function_identity_name')
 where exists (
-  select 1
-  from pg_proc
-  where proname = 'pgaadauth_create_principal'
-)
-and not exists (
   select 1
   from pg_roles
   where rolname = :'function_identity_name'
 )
 \gexec
 
-select format('create role %I login;', :'function_identity_name')
+select format('missing required Azure Postgres Entra role: %s', :'function_identity_name') as error
 where not exists (
-  select 1
-  from pg_proc
-  where proname = 'pgaadauth_create_principal'
-)
-and not exists (
   select 1
   from pg_roles
   where rolname = :'function_identity_name'
 )
-\gexec
+\gset
 
 grant usage on schema public to :"function_identity_name";
 grant select, insert, update, delete on all tables in schema public to :"function_identity_name";

@@ -1,14 +1,19 @@
 param(
     [string]$Subscription,
-    [string]$ResourceGroup = "rg-hw-propertiesapmail-nonprod",
-    [string]$PostgresServer = "pg-hw-propertiesapmail-nonprod",
+    [string]$ResourceGroup = "rg0hw-propertiesapmail-prod",
+    [string]$PostgresServer = "pg-hw-propertiesapmail-prod",
     [string]$DatabaseName = "apautomation",
     [Parameter(Mandatory = $true)]
     [string]$AdminUser,
-    [string]$FunctionIdentityName = "id-hw-propertiesapmail-nonprod"
+    [string]$FunctionIdentityName = "id-hw-propertiesapmail-prod",
+    [switch]$ConfirmProduction
 )
 
 $ErrorActionPreference = "Stop"
+
+if (-not $ConfirmProduction) {
+    throw "Production PostgreSQL deployment requires -ConfirmProduction."
+}
 
 function Test-CommandAvailable {
     param([string]$Name)

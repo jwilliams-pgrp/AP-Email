@@ -21,7 +21,7 @@ psql -h localhost -U postgres -d apautomation -v ON_ERROR_STOP=1 -f db\schema.sq
 psql -h localhost -U postgres -d apautomation -v ON_ERROR_STOP=1 -f db\seed.sql
 ```
 
-`db/schema.sql` is the full replayable DDL baseline exported from local Postgres. `db/seed.sql` seeds canonical `asset` and `ownership` rows exported from the live local `apautomation` database, plus local workflow rules, destinations, runtime config, and no-action patterns. Management-maintained `asset_custom` rows are not deleted or reseeded by `seed.sql`. One-time SQL files are not part of the current baseline; accepted changes must be folded back into `schema.sql` and/or `seed.sql`.
+`db/schema.sql` is the full replayable DDL baseline exported from local Postgres. `db/seed.sql` seeds canonical `asset`, `asset_custom`, and `ownership` rows exported from the live local `apautomation` database, plus local workflow rules, destinations, runtime config, and no-action patterns. One-time SQL files are not part of the current baseline; accepted changes must be folded back into `schema.sql` and/or `seed.sql`.
 
 Regenerate the local schema baseline from the canonical local database:
 
@@ -30,7 +30,7 @@ $env:PGPASSWORD='<local-postgres-password>'
 pg_dump -h localhost -U postgres -d apautomation --schema=public --schema-only --no-owner --no-privileges --file db\schema.sql
 ```
 
-Regenerate `db/seed.sql` from workflow/reference/config tables only. Do not include operational or sensitive tables such as `emails`, `attachments`, `invoices`, `extractions`, `decisions`, `actions`, `audit_runs`, `audit_steps`, `llm_interactions`, artifact records, queue entries, or history records.
+Regenerate `db/seed.sql` from workflow/reference/config tables only: `routing_destinations`, `ownership`, `asset`, `asset_custom`, `runtime_config`, `no_action_email_patterns`, `workflow_rules`, `workflow_rule_versions`, and `workflow_rule_conditions`. Do not include operational or sensitive tables such as `emails`, `attachments`, `invoices`, `extractions`, `decisions`, `actions`, `audit_runs`, `audit_steps`, `llm_interactions`, artifact records, queue entries, or history records.
 
 Deploy the nonprod Azure Postgres baseline:
 

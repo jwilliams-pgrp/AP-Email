@@ -1102,11 +1102,12 @@ class ExtractionValidationTests(unittest.TestCase):
             "Filename, attachment title, and subject are weak metadata",
             "Receipt.pdf with invoice number, invoice date, terms, line items, tax, and total",
             "Invoice-positive signals include invoice number, INV:, Invoice #",
-            "single current payable bill or invoice is present with invoice number, due date, total/current amount due",
-            "Do not classify as statement or account_summary solely because labels say Statement Date, Summary of Charges, Previous Balance, or Balance Forward",
+            "single current payable bill or invoice is present with an account/customer/invoice number, due date or payment deadline, total/current amount due",
+            "Do not classify as statement or account_summary solely because labels say Statement Date, Utility Bill, Customer Account Information",
             "Set observed_facts.indicates_statement_or_account_summary=true only when statement/account-summary structure dominates over payable invoice structure",
             "If both are present but a single payable invoice is complete, keep document_type=\"invoice\" and mention the conflicting statement labels in evidence.summary",
-            "A FiberFirst-style utility/service bill with Statement Date, Summary of Charges, Previous Balance, or Balance Forward labels is still document_type=\"invoice\"",
+            "A municipal utility bill or FiberFirst-style utility/service bill with Statement Date, Utility Bill, Customer Account Information",
+            "Do not set observed_facts.current_invoice_is_past_due=true from an attachment label such as Past Due Amount",
             "Do not use account_summary solely because a filename or title says Receipt",
             "non-payable receipts, customer statements, aging summaries, balance recaps",
             "payment confirmation, paid receipt, receipt of payment, payment received, paid by, paid on",
@@ -1300,7 +1301,12 @@ class ExtractionValidationTests(unittest.TestCase):
         self.assertIn("multiple separate invoice attachments; separate invoice PDFs are separate items", prompt)
         self.assertIn("Use the past_due risk_flag only when the current email subject or body explicitly calls the payable invoice past due", prompt)
         self.assertIn("Do not use the past_due risk_flag merely because an invoice contains an aging table", prompt)
+        self.assertIn("Do not use the past_due risk_flag because an attachment has a Past Due Amount label", prompt)
         self.assertIn("account-level aging balances", prompt)
+        self.assertIn("A utility, municipal, telecom, water, sewer, electric, trash, or service bill with one current payable amount", prompt)
+        self.assertIn("must use document_type=\"invoice\" and extraction_route=\"invoice_detail\"", prompt)
+        self.assertIn("Do not use statement_detail solely because the source says statement, utility bill, customer account information", prompt)
+        self.assertIn("where statement/account-summary/notice structure dominates over a single current payable bill", prompt)
         self.assertIn("invoice_detail", prompt)
         self.assertIn("exception_detail", prompt)
         self.assertIn("credit memos", prompt)
@@ -1358,6 +1364,40 @@ class ExtractionValidationTests(unittest.TestCase):
         self.assertIn("Bill-to-only facts in the email body must not create a second invoice item", prompt)
         self.assertIn("Quoted statement, invoice, or vendor-question history must not override a latest-body no-action acknowledgement", prompt)
         self.assertIn("Empty latest body, signature-only latest body, contact-card-only latest body, or an internal sender alone is not social/no-action language", prompt)
+        self.assertIn("utility/service bill fields", prompt)
+
+        statement_prompt = _prompt(
+            ParsedMsg(
+                subject="Utility Bill",
+                sender_email="utility@example.com",
+                sender_name="Utility",
+                received_at=None,
+                body_text="Please see attached utility bill.",
+                body_html=None,
+                transport_headers=None,
+                attachments=(),
+                metadata={},
+            ),
+            [],
+            triage_payload={
+                "schema_version": "extraction_triage_batch.v1",
+                "items": [
+                    {
+                        "item_kind": "attachment",
+                        "item_key": "attachment:statement",
+                        "display_name": "UtilityBill.pdf",
+                        "source_attachments": ["UtilityBill.pdf"],
+                        "document_type": "statement",
+                        "requires_detail_extraction": True,
+                        "extraction_route": "statement_detail",
+                        "risk_flags": [],
+                        "confidence": 0.91,
+                        "reason": "Utility bill was initially labeled as statement.",
+                    }
+                ],
+            },
+        )
+        self.assertIn("return document_type=\"invoice\" despite triage", statement_prompt)
 
     def test_azure_openai_prompt_includes_asset_reference_for_normalization_only(self) -> None:
         prompt = _prompt(

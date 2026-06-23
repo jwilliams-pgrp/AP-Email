@@ -569,8 +569,8 @@ def _prompt(
         "Classify invoice-like content as invoice even when the filename or title says Receipt, including Receipt.pdf. "
         "Invoice-positive signals include invoice number, INV:, Invoice #, invoice date, due date, vendor, terms, amount, subtotal, tax, total, balance due, "
         "current amount due, current charges, service period, bill-to, sold-to, ship-to, service/site/property address, line items, quantities, unit prices, delivery charges, service charges, payment instructions, and remittance instructions. "
-        "Classify a utility, telecom, or service bill as document_type=\"invoice\" when a single current payable bill or invoice is present with invoice number, due date, total/current amount due, service charges or service period, and bill-to, service address, property, or payment/remittance details. "
-        "Do not classify as statement or account_summary solely because labels say Statement Date, Summary of Charges, Previous Balance, or Balance Forward. "
+        "Classify a utility, municipal, telecom, water, sewer, electric, trash, or service bill as document_type=\"invoice\" when a single current payable bill or invoice is present with an account/customer/invoice number, due date or payment deadline, total/current amount due, service charges or service period, and bill-to, service address, property, or payment/remittance details. "
+        "Do not classify as statement or account_summary solely because labels say Statement Date, Utility Bill, Customer Account Information, Summary of Charges, Previous Balance, Payments, Adjustments, Penalties, Past Due Amount, Amount Due After Due Date, or Balance Forward. "
         "Use \"statement\" or \"account_summary\" only for documents dominated by non-payable receipt-only documents, customer statements, aging summaries, balance recaps, payment confirmations, transaction histories, or multiple open-item summaries. "
         "Do not use account_summary solely because a filename or title says Receipt. "
         "Classify a completed-payment document as document_type=\"account_summary\" and set observed_facts.indicates_statement_or_account_summary=true only when the source explicitly confirms payment already completed, such as payment confirmation, paid receipt, receipt of payment, payment received, paid by, paid on, a confirmation number, reference number, check number, or balance after payment 0.00. "
@@ -606,6 +606,7 @@ def _prompt(
         "should not have received the email, or asks AP to escalate because the destination was wrong.\n"
         "Set observed_facts.current_invoice_is_past_due=true only when the current email subject or body explicitly calls the payable invoice past due, overdue, in collection, or a true past-due notice. "
         "Do not use attachment-only labels, invoice due dates, payment due dates, remit-by dates, or invoice date comparisons to set current-invoice past-due facts. "
+        "Do not set observed_facts.current_invoice_is_past_due=true from an attachment label such as Past Due Amount, especially when the displayed past-due amount is zero. "
         "Do not set observed_facts.current_invoice_is_past_due=true merely because an invoice says payable upon receipt, because invoice.due_date is before email.received_at.date(), or because invoice_date was copied into invoice.due_date. "
         "Extract invoice.due_date only when the source text explicitly labels a concrete calendar date as the due date, payment due date, remit-by date, or equivalent payment deadline. "
         "Do not populate invoice.due_date for due-on-receipt, due upon receipt, payable upon receipt, net due upon receipt, or similar receipt-based payment terms. "
@@ -704,7 +705,7 @@ def _prompt(
         "{\"rank\": 1, \"label\": \"deliver_to|ship_to|service_location|site|property|bill_to|customer_account\", \"street\": \"normalized street or null\", \"city\": \"normalized city or null\", \"state\": \"2-letter lowercase state code or null\", \"zipcode\": \"5-digit ZIP string or null\", \"normalized_address\": \"complete normalized address or null\", \"source\": \"email|attachment:file.pdf:page or null\", \"confidence\": 0.0, \"evidence_text\": \"short visible source text or null\"}. "
         "Project, property, tenant, account, alias, or job names without address components must not be address candidates. "
         "Filename, attachment title, and subject are weak metadata for document type. Receipt.pdf with invoice number, invoice date, terms, line items, tax, and total must be document_type=\"invoice\", not account_summary. "
-        "A FiberFirst-style utility/service bill with Statement Date, Summary of Charges, Previous Balance, or Balance Forward labels is still document_type=\"invoice\" when it contains one current payable bill with invoice number, due date, current amount due, service charges, and bill-to, service address, property, or payment/remittance facts. "
+        "A municipal utility bill or FiberFirst-style utility/service bill with Statement Date, Utility Bill, Customer Account Information, Summary of Charges, Previous Balance, Payments, Adjustments, Penalties, Past Due Amount, Amount Due After Due Date, or Balance Forward labels is still document_type=\"invoice\" when it contains one current payable bill with an account/customer/invoice number, due date or payment deadline, current amount due, service charges or service period, and bill-to, service address, property, or payment/remittance facts. "
         "True account summaries and statements are limited to non-payable receipts, customer statements, aging summaries, balance recaps, payment confirmations, transaction histories, or multiple open-item summaries where that structure dominates over a single payable invoice. "
         "Use document_type=\"credit_memo\" only when source-visible subject, current body, selected attachment text, or document title identifies a credit memo, credit memorandum, credit adjustment, credit note, or issued credit. Do not use credit_memo for ordinary invoices with credits/payments rows, discounts, negative adjustments, or payment history. "
         "Completed-payment documents with explicit payment confirmation, paid receipt, receipt of payment, payment received, paid by, paid on, confirmation number, reference number, check number, or balance after payment 0.00 evidence should be document_type=\"account_summary\" with observed_facts.indicates_statement_or_account_summary=true only when there is no current request to pay, view, download, or retrieve a bill or invoice and no current amount due. "
@@ -738,9 +739,13 @@ def _route_guidance(triage_payload: dict[str, Any]) -> str:
     }
     guidance = ["Route-specific detail guidance:"]
     if "invoice_detail" in routes:
-        guidance.append("- For invoice_detail items, focus on payable invoice fields, property lookup signals, amount/date/vendor facts, and AP exception flags.")
+        guidance.append(
+            "- For invoice_detail items, focus on payable invoice fields, utility/service bill fields, property lookup signals, amount/date/vendor facts, and AP exception flags."
+        )
     if "statement_detail" in routes:
-        guidance.append("- For statement_detail items, focus on statement/account-summary/notice facts, filing-relevant observed facts, and avoid inventing payable invoice fields.")
+        guidance.append(
+            "- For statement_detail items, focus on statement/account-summary/notice facts, filing-relevant observed facts, and avoid inventing payable invoice fields. If detailed attachment evidence shows one current payable utility, municipal, telecom, water, sewer, electric, trash, or service bill, return document_type=\"invoice\" despite triage."
+        )
     if "exception_detail" in routes:
         guidance.append("- For exception_detail items, focus on source-visible risk facts such as link-only, vendor inquiry, wrong destination, past due, contracts, pay applications, unsupported files, and conflicting signals.")
     if "notice_detail" in routes:
@@ -801,9 +806,12 @@ def _triage_prompt(parsed_msg: ParsedMsg, attachment_records: list[dict[str, Any
         "Do not use the multi_invoice risk_flag merely because the email mentions an invoice number, the filename contains an invoice number, or there are multiple separate invoice attachments; separate invoice PDFs are separate items.\n"
         "Use the past_due risk_flag only when the current email subject or body explicitly calls the payable invoice past due, overdue, in collection, or a true past-due notice. "
         "Do not use the past_due risk_flag merely because an invoice contains an aging table or nonzero 1-30, 31-60, 61-90, or 90+ past-due buckets. "
+        "Do not use the past_due risk_flag because an attachment has a Past Due Amount label when the current email subject/body does not explicitly say past due, overdue, or collection, especially when the displayed past-due amount is zero. "
         "When the document shows account-level aging balances but the current invoice is not explicitly past due, mention the aging table in reason and do not include past_due in risk_flags.\n"
-        "Use invoice_detail for payable invoices, check requests, and invoice-like bills requiring field extraction.\n"
-        "Use statement_detail for statements, account summaries, receipts, ACH notices, auto-draft notices, and Ben E Keith notices.\n"
+        "Use invoice_detail for payable invoices, check requests, and invoice-like bills requiring field extraction. "
+        "A utility, municipal, telecom, water, sewer, electric, trash, or service bill with one current payable amount, a due date or payment deadline, service period or service charges, account/customer number, and service, bill-to, or property address must use document_type=\"invoice\" and extraction_route=\"invoice_detail\". "
+        "Do not use statement_detail solely because the source says statement, utility bill, customer account information, previous balance, payments, adjustments, penalties, past due amount, or amount due after due date.\n"
+        "Use statement_detail for true statements, account summaries, receipts, ACH notices, auto-draft notices, and Ben E Keith notices where statement/account-summary/notice structure dominates over a single current payable bill.\n"
         "Use exception_detail for contracts, pay applications, credit memos, lien releases, multi-invoice PDFs, link-only invoices, vendor questions, payment inquiries, wrong-destination replies, past-due notices, unsupported files with AP facts, and ambiguous high-risk content.\n"
         "Use document_type credit_memo only when the source-visible subject, current body, selected attachment text, or document title identifies a credit memo, credit memorandum, credit adjustment, credit note, or issued credit. Do not use credit_memo for an ordinary payable invoice with credits/payments rows, discounts, negative adjustments, or payment history.\n"
         "Use email_only_detail only when the current email body independently contains AP workflow facts that selected readable attachments do not already hold as item evidence.\n"
