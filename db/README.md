@@ -46,6 +46,21 @@ Deploy the nonprod Azure Postgres baseline:
 
 The deploy script acquires an Azure PostgreSQL Entra token, creates the database if needed, applies `db/schema.sql`, `db/seed.sql`, and `db/azure-permissions.sql`, then prints verification counts for key workflow/reference tables.
 
+Apply the targeted current-reply no-action sender-domain update to an existing database:
+
+```powershell
+psql -h <postgres-host> -U <entra-admin-user> -d apautomation -v ON_ERROR_STOP=1 -f db\update-current-reply-no-action-any-sender.sql
+```
+
+For production, use the production Azure PostgreSQL host and an Entra admin token/session. The full production baseline deploy still requires explicit confirmation:
+
+```powershell
+.\deploy-azure-postgres-prod.ps1 `
+  -Subscription '<subscription-id-or-name>' `
+  -AdminUser '<entra-admin-user>' `
+  -ConfirmProduction
+```
+
 Optional quick verification after seeding:
 
 ```sql

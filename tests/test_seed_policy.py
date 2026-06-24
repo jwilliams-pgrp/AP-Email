@@ -41,6 +41,7 @@ class SeedPolicyTests(unittest.TestCase):
             "add-credit-memo-escalation.sql",
             "add-zero-dollar-invoice-escalation.sql",
             "update-current-reply-no-action.sql",
+            "update-current-reply-no-action-any-sender.sql",
         }
         one_time_scripts = [
             path.name

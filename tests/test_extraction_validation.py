@@ -1300,6 +1300,7 @@ class ExtractionValidationTests(unittest.TestCase):
         self.assertIn("one invoice number, one total, one balance due, or an aging table", prompt)
         self.assertIn("multiple separate invoice attachments; separate invoice PDFs are separate items", prompt)
         self.assertIn("Use the past_due risk_flag only when the current email subject or body explicitly calls the payable invoice past due", prompt)
+        self.assertIn("Do not use the past_due risk_flag from quoted history, inherited reply-chain subject text", prompt)
         self.assertIn("Do not use the past_due risk_flag merely because an invoice contains an aging table", prompt)
         self.assertIn("Do not use the past_due risk_flag because an attachment has a Past Due Amount label", prompt)
         self.assertIn("account-level aging balances", prompt)
@@ -1318,6 +1319,7 @@ class ExtractionValidationTests(unittest.TestCase):
         self.assertIn("repeats invoice number, due date, total, balance due, bill-to, or payment summary", prompt)
         self.assertIn("email.latest_body_text is authoritative", prompt)
         self.assertIn('"Thank you. I just sent it."', prompt)
+        self.assertIn("payment is scheduled, sent, paid, processed, or will be handled", prompt)
         self.assertIn("signature-only latest body", prompt)
         self.assertIn("A forwarded message can reactivate quoted AP content", prompt)
         self.assertIn("If the language or context is fuzzy, lean away from no_detail and preserve AP-risk facts", prompt)
@@ -1398,6 +1400,33 @@ class ExtractionValidationTests(unittest.TestCase):
             },
         )
         self.assertIn("return document_type=\"invoice\" despite triage", statement_prompt)
+
+    def test_targeted_extraction_prompt_treats_payment_status_replies_as_no_action(self) -> None:
+        prompt = _prompt(
+            ParsedMsg(
+                subject="RE: Account Seriously Past Due",
+                sender_email="PropertiesAP@hillwood.com",
+                sender_name="PropertiesAP",
+                received_at=None,
+                body_text="Payment is scheduled for Friday via ACH.",
+                body_html=None,
+                transport_headers=None,
+                attachments=(),
+                metadata={
+                    "thread_context": {
+                        "latest_body_text": "Payment is scheduled for Friday via ACH.",
+                        "quoted_history_text": "Your account is seriously past due. Please provide payment status.",
+                        "has_quoted_history": True,
+                    }
+                },
+            ),
+            [],
+        )
+
+        self.assertIn('"scheduled for payment Friday"', prompt)
+        self.assertIn('"paid via ACH"', prompt)
+        self.assertIn("A current internal AP reply answering a prior vendor question with payment timing or status", prompt)
+        self.assertIn("Do not set observed_facts.current_invoice_is_past_due=true from quoted history, inherited RE: subject text", prompt)
 
     def test_azure_openai_prompt_includes_asset_reference_for_normalization_only(self) -> None:
         prompt = _prompt(
@@ -1660,6 +1689,37 @@ class ExtractionValidationTests(unittest.TestCase):
         self.assertIn("excluded_attachments as irrelevant_to_ap_workflow", prompt)
         self.assertIn("Do not set mentions_separate_backup_document=true for embedded invoice pages", prompt)
         self.assertIn("inline images, logos, decorative images, or attachments excluded as irrelevant", prompt)
+
+    def test_azure_openai_prompt_disambiguates_invoice_number_from_address(self) -> None:
+        prompt = _prompt(
+            ParsedMsg(
+                subject="Completed Service",
+                sender_email="info@forterrapestcontrol.com",
+                sender_name="Forterra Pest Control",
+                received_at=None,
+                body_text="Invoice attached.",
+                transport_headers=None,
+                attachments=(),
+                metadata={},
+            ),
+            [
+                {
+                    "file_name": "forterrapest_170898_invoice_pdf.pdf",
+                    "content_type": "application/pdf",
+                    "text_excerpt": (
+                        "Invoice 2451 Westlake Parkway INVOICE NO. ACCOUNT NUMBER "
+                        "231068 5006 INVOICE DATE 06/23/2026"
+                    ),
+                    "metadata": {"extractor_selection": {"selected_extractor": "pymupdf"}},
+                }
+            ],
+        )
+
+        self.assertIn("Invoice number disambiguation", prompt)
+        self.assertIn("Extract invoice.invoice_number only from a value explicitly labeled", prompt)
+        self.assertIn("Do not use numbers from service/property/bill-to addresses", prompt)
+        self.assertIn("Invoice 2451 Westlake Parkway INVOICE NO. ACCOUNT NUMBER 231068 5006", prompt)
+        self.assertIn("use the value associated with `INVOICE NO.` (`231068`) as invoice.invoice_number", prompt)
 
     def test_azure_openai_triage_prompt_keeps_invoice_backup_as_item(self) -> None:
         prompt = _triage_prompt(

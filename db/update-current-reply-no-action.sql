@@ -51,10 +51,13 @@ set rule_name = excluded.rule_name,
 insert into workflow_rule_conditions (rule_code, condition_key, condition_value)
 values
   ('hard_current_reply_no_action', 'max_chars', '320'::jsonb),
-  ('hard_current_reply_no_action', 'require_quoted_history', 'true'::jsonb),
-  ('hard_current_reply_no_action', 'allowed_sender_domains', '["hillwood.com"]'::jsonb)
+  ('hard_current_reply_no_action', 'require_quoted_history', 'true'::jsonb)
 on conflict (rule_code, condition_key) do update
 set condition_value = excluded.condition_value;
+
+delete from workflow_rule_conditions
+where rule_code = 'hard_current_reply_no_action'
+  and condition_key = 'allowed_sender_domains';
 
 insert into workflow_rule_versions (
   rule_code,

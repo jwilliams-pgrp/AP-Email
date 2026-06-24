@@ -40,7 +40,7 @@ A decision object containing:
 - The engine must fail loudly if required workflow configuration is missing.
 - The engine must not silently substitute hard-coded business defaults.
 - Deterministic gate authority cannot be bypassed by fuzzy retrieval quality alone.
-- For current thread replies, LLM extraction may classify whether `email.latest_body_text` indicates no AP action, but the decision engine must deterministically enforce quoted-history, sender-policy, and current-attachment gates before producing `DISCARD` / `NO_ACTION`.
+- For current thread replies, LLM extraction may classify whether `email.latest_body_text` indicates no AP action, but the decision engine must deterministically enforce quoted-history and current-attachment gates before producing `DISCARD` / `NO_ACTION`. Sender domain is an extraction indicator only and must not block social/no-action routing.
 
 ## Asset Matching Contract
 

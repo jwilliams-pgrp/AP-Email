@@ -1234,6 +1234,107 @@ class DecisionEngineGoldenScenarioTests(unittest.TestCase):
         self.assertEqual(decision.matched_rule_code, "hard_current_reply_no_action")
         self.assertEqual(decision.routing_match["decision_context"]["latest_body_text"], "Received - will process for payment.")
 
+    def test_external_current_reply_llm_no_action_fact_routes_to_no_action(self) -> None:
+        payload = _payload(
+            document_type="unknown",
+            sender_email="wendi.cassel@westwoodps.com",
+            vendor_name=None,
+            property_code=None,
+            bill_to=None,
+            business_unit_code=None,
+            has_invoice_attachment=False,
+            amount=0,
+            source_attachments=[],
+            flags=["latest_reply_no_action"],
+            evidence_summary="Latest reply says thanks for the payment-status update.",
+        )
+        extraction = validate_extraction(payload)
+
+        decision = DecisionEngine(InMemoryPolicyRepository(), property_match_reviewer=FakePropertyMatchReviewer()).decide(
+            extraction,
+            "idempotency-key",
+            decision_context=DecisionContext(
+                latest_body_text="Great, thanks for the update Leslie!",
+                quoted_history_text="Prior payment inquiry and past-due invoice content.",
+                has_quoted_history=True,
+            ),
+        ).decision
+
+        self.assertEqual(decision.outcome, "DISCARD")
+        self.assertEqual(decision.destination_code, "NO_ACTION")
+        self.assertEqual(decision.matched_rule_code, "hard_current_reply_no_action")
+
+    def test_internal_payment_scheduled_reply_routes_to_no_action_not_vendor_or_past_due(self) -> None:
+        payload = _payload(
+            document_type="unknown",
+            sender_email="PropertiesAP@hillwood.com",
+            vendor_name=None,
+            property_code=None,
+            bill_to=None,
+            business_unit_code=None,
+            has_invoice_attachment=False,
+            amount=0,
+            source_attachments=[],
+            flags=["latest_reply_no_action"],
+            evidence_summary="Latest reply says payment is scheduled for Friday via ACH.",
+        )
+        extraction = validate_extraction(payload)
+
+        decision = DecisionEngine(InMemoryPolicyRepository(), property_match_reviewer=FakePropertyMatchReviewer()).decide(
+            extraction,
+            "idempotency-key",
+            decision_context=DecisionContext(
+                latest_body_text=(
+                    "Hello Wendi,\n"
+                    "Our apologies for the delay in processing time! I show this is scheduled for payment this Friday, "
+                    "6/26/26, via ACH.\n"
+                    "Please let me know if you'll need any additional information."
+                ),
+                quoted_history_text=(
+                    "Subject: Trade Winds East 9 ac / R0060240.28 - Account Seriously Past Due - "
+                    "Invoice(s) Aged Over 90 Days Totaling $1,375\n"
+                    "Please provide payment status and remit payment electronically."
+                ),
+                has_quoted_history=True,
+            ),
+        ).decision
+
+        self.assertNotIn("vendor_inquiry", extraction.document.document_flags)
+        self.assertNotIn("past_due", extraction.document.document_flags)
+        self.assertEqual(decision.outcome, "DISCARD")
+        self.assertEqual(decision.destination_code, "NO_ACTION")
+        self.assertEqual(decision.matched_rule_code, "hard_current_reply_no_action")
+
+    def test_external_current_reply_without_no_action_fact_still_escalates_vendor_question(self) -> None:
+        payload = _payload(
+            document_type="payment_inquiry",
+            sender_email="wendi.cassel@westwoodps.com",
+            vendor_name="Westwood Professional Services",
+            property_code=None,
+            bill_to="Hillwood",
+            business_unit_code=None,
+            has_invoice_attachment=False,
+            amount=0,
+            source_attachments=[],
+            flags=["vendor_inquiry"],
+            evidence_summary="Latest reply asks AP to confirm payment status.",
+        )
+        extraction = validate_extraction(payload)
+
+        decision = DecisionEngine(InMemoryPolicyRepository(), property_match_reviewer=FakePropertyMatchReviewer()).decide(
+            extraction,
+            "idempotency-key",
+            decision_context=DecisionContext(
+                latest_body_text="Can you please confirm when this payment will be sent?",
+                quoted_history_text="Prior invoice content.",
+                has_quoted_history=True,
+            ),
+        ).decision
+
+        self.assertEqual(decision.outcome, "ESCALATE")
+        self.assertEqual(decision.destination_code, "ESCALATE_VENDOR_QUESTION")
+        self.assertEqual(decision.matched_rule_code, "hard_vendor_inquiry")
+
     def test_current_reply_no_action_fact_can_override_llm_invoice_type_guess(self) -> None:
         payload = _payload(
             document_type="invoice",
@@ -1940,7 +2041,7 @@ def _rules() -> list[WorkflowRule]:
             "current_reply_no_action",
             "DISCARD",
             "NO_ACTION",
-            {"require_quoted_history": True, "allowed_sender_domains": ["hillwood.com"]},
+            {"require_quoted_history": True},
         ),
         _rule(
             "appointment_informational_notice",
