@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from html.parser import HTMLParser
@@ -181,6 +182,13 @@ class GraphMailboxClient:
         updated_message_id = message_id
         resolved_destination_id: str | None = None
         updated_web_link: str | None = None
+        final_categories = list(existing_categories)
+        if label and label not in final_categories:
+            final_categories.append(label)
+            self._graph_patch(
+                f"{GRAPH_BASE_URL}/users/{self._user_principal_name}/messages/{message_id}",
+                {"categories": final_categories},
+            )
         if parent_folder:
             resolved_destination_id = self._resolve_destination_folder_id(
                 parent_folder_hint=parent_folder,
@@ -194,13 +202,6 @@ class GraphMailboxClient:
             updated_message_id = move_response.get("id", message_id)
             if isinstance(move_response.get("webLink"), str):
                 updated_web_link = move_response["webLink"]
-        final_categories = list(existing_categories)
-        if label and label not in final_categories:
-            final_categories.append(label)
-            self._graph_patch(
-                f"{GRAPH_BASE_URL}/users/{self._user_principal_name}/messages/{updated_message_id}",
-                {"categories": final_categories},
-            )
         if parent_folder and updated_web_link is None:
             routed_message = self._graph_get(
                 f"{GRAPH_BASE_URL}/users/{self._user_principal_name}/messages/{updated_message_id}",
@@ -219,15 +220,13 @@ class GraphMailboxClient:
 
     def forward_message(self, message_id: str, recipient_email: str, comment: str | None = None) -> dict[str, Any]:
         recipient = recipient_email.strip()
-        if not recipient:
+        recipients = _parse_recipient_emails(recipient_email)
+        if not recipients:
             raise GraphMailboxError("Cannot forward Graph message without a recipient email address.")
         payload: dict[str, Any] = {
             "toRecipients": [
-                {
-                    "emailAddress": {
-                        "address": recipient,
-                    }
-                }
+                {"emailAddress": {"address": address}}
+                for address in recipients
             ]
         }
         if comment:
@@ -236,7 +235,7 @@ class GraphMailboxClient:
             f"{GRAPH_BASE_URL}/users/{self._user_principal_name}/messages/{message_id}/forward",
             payload,
         )
-        return {"forwarded": True, "recipient_email": recipient}
+        return {"forwarded": True, "recipient_email": recipient, "recipient_emails": recipients}
 
     def _resolve_required_unique_folder_id_by_display_name(self, display_name: str) -> str:
         cached = self._load_folder_cache()
@@ -469,6 +468,10 @@ def _required_env_any(*names: str) -> str:
         if value:
             return value
     raise GraphMailboxError(f"Missing required environment variable: {' or '.join(names)}")
+
+
+def _parse_recipient_emails(recipient_email: str) -> list[str]:
+    return [address for address in (part.strip() for part in re.split(r"[;,]", recipient_email)) if address]
 
 
 def _parse_graph_datetime(value: str | None) -> datetime | None:

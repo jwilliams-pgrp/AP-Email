@@ -248,7 +248,9 @@ class PropertyMatchAssistantTests(unittest.TestCase):
         self.assertIn("Preserve visible asset-code families exactly", prompt)
         self.assertIn("WP9, GW9, HC2, HWC2, ACC 14, and ACN5 are distinct alias families", prompt)
         self.assertIn("Do not convert visible Westport/WP evidence into Alliance Gateway/GW evidence", prompt)
+        self.assertIn("Westport and Gateway are distinct asset families even when the building number overlaps", prompt)
         self.assertIn("If source evidence says WP9 and a candidate is GW9 / Alliance Gateway 9, do not select GW9", prompt)
+        self.assertIn("If source evidence says Westport 14 & 15 and candidates include GW14 / Alliance Gateway 14 or GW15 / Alliance Gateway 15", prompt)
         self.assertIn("If extracted property_code and property_name conflict", prompt)
         self.assertIn("Service at: WP9 400 intermodal pkwy", prompt)
         self.assertIn("\"asset_alias\": \"WP9\"", prompt)
@@ -285,11 +287,51 @@ class PropertyMatchAssistantTests(unittest.TestCase):
         prompt = assistant.llm_extractor.prompt
         self.assertIn("clear semantic near-name evidence", prompt)
         self.assertIn("Gateway 15 -> Alliance Gateway 15 / GW15", prompt)
+        self.assertIn("The Gateway 15 example applies only when source evidence visibly says Gateway", prompt)
         self.assertIn("Circle T Golf Course -> Circle T Golf / CTG", prompt)
         self.assertIn("Heritage Commons 2 -> Heritage Commons II / HC2", prompt)
         self.assertIn("vague family names or ambiguous partial names", prompt)
         self.assertIn("Gateway 15", prompt)
         self.assertIn("\"asset_name\": \"Alliance Gateway 15\"", prompt)
+
+    def test_prompt_rejects_westport_number_overlap_as_gateway_match(self) -> None:
+        assistant = PropertyMatchAssistant(FakeLlmExtractor(_interpretation_payload("asset-WP15", asset_alias="WP15")))
+
+        assistant.suggest(
+            validate_extraction(
+                _payload(
+                    property_code="gw15",
+                    property_name="alliance gateway 15",
+                    project_number="3085",
+                    service_address="Westport 14 & 15",
+                    evidence_summary="Project: 3085 Hillwood Alliance Westport 14 & 15.",
+                    possible_property_aliases=["westport 14 & 15"],
+                    property_lookup={
+                        "property_code": ["gw15"],
+                        "property_name": ["alliance gateway 15"],
+                        "tenant": ["hillwood alliance"],
+                        "address": [],
+                        "suite": [],
+                        "city": [],
+                        "state": [],
+                        "zipcode": [],
+                    },
+                )
+            ),
+            [
+                {**_alias("GW14"), "asset_id": "asset-GW14", "asset_alias": "GW14", "asset_name": "Alliance Gateway 14"},
+                {**_alias("GW15"), "asset_id": "asset-GW15", "asset_alias": "GW15", "asset_name": "Alliance Gateway 15"},
+                {**_alias("WP15"), "asset_id": "asset-WP15", "asset_alias": "WP15", "asset_name": "Alliance Westport 15"},
+            ],
+        )
+
+        prompt = assistant.llm_extractor.prompt
+        self.assertIn("Project: 3085 Hillwood Alliance Westport 14 & 15", prompt)
+        self.assertIn("Westport and Gateway are distinct asset families even when the building number overlaps", prompt)
+        self.assertIn("If source evidence says Westport 14 & 15 and candidates include GW14 / Alliance Gateway 14 or GW15 / Alliance Gateway 15", prompt)
+        self.assertIn("The Gateway 15 example applies only when source evidence visibly says Gateway", prompt)
+        self.assertIn("\"asset_alias\": \"GW15\"", prompt)
+        self.assertIn("\"asset_alias\": \"WP15\"", prompt)
 
     def test_property_match_assistant_allows_check_request_review(self) -> None:
         assistant = PropertyMatchAssistant(FakeLlmExtractor(_interpretation_payload("asset-GW31", asset_alias="GW31")))

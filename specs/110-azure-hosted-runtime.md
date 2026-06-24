@@ -96,11 +96,12 @@ Required behavior:
 - Each recurrence must call the Function App intake endpoint.
 - Each Function invocation must pull and process at most one available Outlook inbox email.
 - Processing failures must wait 30 seconds and retry the same email once before reporting final failure.
+- Action-stage failures after a final decision is persisted must fail the same audit run and must not replay the whole email pipeline or create a second audit run.
 - Repeated recurrences continue processing the inbox until no message is available.
 - The Function endpoint must reject unauthorized callers in Azure.
 - Disabling intake must be controlled by deployment configuration, not code changes.
 - Outbound destination email forwarding must be controlled by Function App setting `AP_ENABLE_OUTBOUND_EMAIL_FORWARDING`, default false. Forwarding may occur only when `APP_ENV=AZURE`, the setting is true, and the matched `routing_destinations` row has `send_email=true` with an `email_address`.
-- When outbound forwarding is enabled for a destination, the runtime must forward the routed Graph message to `routing_destinations.email_address` and still move the original message to the configured folder destination.
+- When outbound forwarding is enabled for a destination, the runtime must forward the routed Graph message to all recipients parsed from `routing_destinations.email_address` and still move the original message to the configured folder destination. The field may contain one address or multiple comma/semicolon-separated addresses.
 - The hosted Management page process toggle may enable or disable the configured Logic App workflow through the dashboard API.
 - Logic App process control must use Azure managed identity / RBAC and the configured Logic App resource id.
 - Logic App process control must be unavailable in `LOCAL` and must fail explicitly when Azure management configuration or permissions are missing.
@@ -163,5 +164,5 @@ Parameter files must contain placeholders only.
 - Local process control reports unavailable and does not mutate Azure resources.
 - Function intake processing retries one failed processing attempt after 30 seconds, then reports failure if the retry also fails.
 - Outbound forwarding remains disabled in nonprod/development by default and is enabled in PROD only through explicit deployment configuration.
-- When outbound forwarding is enabled and a destination has `send_email=true`, a configured `email_address` is forwarded while folder routing still occurs; missing destination email produces an explicit audited skip rather than a silent send attempt.
+- When outbound forwarding is enabled and a destination has `send_email=true`, a configured `email_address` is forwarded to each parsed recipient while folder routing still occurs; missing destination email produces an explicit audited skip rather than a silent send attempt.
 - Secret hygiene tests fail if tracked source or docs contain obvious real secrets.

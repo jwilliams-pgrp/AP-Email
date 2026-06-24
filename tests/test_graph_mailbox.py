@@ -389,14 +389,105 @@ class GraphMailboxResolverTests(unittest.TestCase):
         self.assertEqual(result["message_id"], "moved-msg-1")
         self.assertEqual(result["office_web_link"], "https://outlook.office.com/mail/ESCALATE/id/moved-msg-1")
 
+    def test_route_message_applies_label_before_move(self) -> None:
+        client = _FakeGraphMailboxClient()
+        client.folder_cache = {
+            "id-escalate": {
+                "id": "id-escalate",
+                "displayName": "ESCALATE",
+                "parentFolderId": "id-inbox",
+                "childFolderCount": 0,
+            }
+        }
+        client.move_payload = {
+            "id": "moved-msg-1",
+            "webLink": "https://outlook.office.com/mail/ESCALATE/id/moved-msg-1",
+        }
+
+        result = client.route_message(
+            message_id="msg-1",
+            existing_categories=("Inbox",),
+            parent_folder="ESCALATE",
+            label="Duplicate Suspected",
+            destination_display_name="DUPLICATE-SUSPECTED",
+            destination_folder_path=None,
+        )
+
+        self.assertEqual(
+            client.operations,
+            [
+                {"operation": "patch", "message_id": "msg-1", "payload": {"categories": ["Inbox", "Duplicate Suspected"]}},
+                {"operation": "move", "message_id": "msg-1", "payload": {"destinationId": "id-escalate"}},
+            ],
+        )
+        self.assertEqual(result["message_id"], "moved-msg-1")
+
     def test_forward_message_posts_recipient_payload(self) -> None:
         client = _FakeGraphMailboxClient()
 
         result = client.forward_message("msg-1", " ap@example.com ")
 
-        self.assertEqual(result, {"forwarded": True, "recipient_email": "ap@example.com"})
+        self.assertEqual(result, {"forwarded": True, "recipient_email": "ap@example.com", "recipient_emails": ["ap@example.com"]})
         self.assertEqual(client.forward_payloads[0]["payload"], {"toRecipients": [{"emailAddress": {"address": "ap@example.com"}}]})
         self.assertTrue(client.forward_payloads[0]["url"].endswith("/users/user@example.com/messages/msg-1/forward"))
+
+    def test_forward_message_posts_semicolon_separated_recipient_payload(self) -> None:
+        client = _FakeGraphMailboxClient()
+
+        result = client.forward_message("msg-1", "Michele.Fellers@hillwood.com; Aliyah.Reyes@hillwood.com")
+
+        self.assertEqual(
+            result,
+            {
+                "forwarded": True,
+                "recipient_email": "Michele.Fellers@hillwood.com; Aliyah.Reyes@hillwood.com",
+                "recipient_emails": ["Michele.Fellers@hillwood.com", "Aliyah.Reyes@hillwood.com"],
+            },
+        )
+        self.assertEqual(
+            client.forward_payloads[0]["payload"],
+            {
+                "toRecipients": [
+                    {"emailAddress": {"address": "Michele.Fellers@hillwood.com"}},
+                    {"emailAddress": {"address": "Aliyah.Reyes@hillwood.com"}},
+                ]
+            },
+        )
+
+    def test_forward_message_posts_comma_separated_recipient_payload(self) -> None:
+        client = _FakeGraphMailboxClient()
+
+        client.forward_message("msg-1", "one@example.com, two@example.com")
+
+        self.assertEqual(
+            client.forward_payloads[0]["payload"],
+            {
+                "toRecipients": [
+                    {"emailAddress": {"address": "one@example.com"}},
+                    {"emailAddress": {"address": "two@example.com"}},
+                ]
+            },
+        )
+
+    def test_forward_message_ignores_empty_recipient_segments(self) -> None:
+        client = _FakeGraphMailboxClient()
+
+        result = client.forward_message("msg-1", " one@example.com; ; two@example.com, ")
+
+        self.assertEqual(result["recipient_emails"], ["one@example.com", "two@example.com"])
+        self.assertEqual(
+            client.forward_payloads[0]["payload"]["toRecipients"],
+            [
+                {"emailAddress": {"address": "one@example.com"}},
+                {"emailAddress": {"address": "two@example.com"}},
+            ],
+        )
+
+    def test_forward_message_rejects_blank_recipient_payload(self) -> None:
+        client = _FakeGraphMailboxClient()
+
+        with self.assertRaises(GraphMailboxError):
+            client.forward_message("msg-1", " ; , ")
 
     def test_list_escalate_messages_preserves_office_web_link(self) -> None:
         client = _FakeGraphMailboxClient()
@@ -464,6 +555,8 @@ class _FakeGraphMailboxClient(GraphMailboxClient):
         self.attachments_message_id: str | None = None
         self.moves: list[dict[str, object]] = []
         self.forward_payloads: list[dict[str, object]] = []
+        self.patch_payloads: list[dict[str, object]] = []
+        self.operations: list[dict[str, object]] = []
 
     def _load_folder_cache(self):
         return self.folder_cache
@@ -486,9 +579,15 @@ class _FakeGraphMailboxClient(GraphMailboxClient):
         if "/messages/" in url and url.endswith("/move"):
             message_id = url.rsplit("/messages/", 1)[1].split("/move", 1)[0]
             self.moves.append({"message_id": message_id, "payload": payload})
+            self.operations.append({"operation": "move", "message_id": message_id, "payload": payload})
         if "/messages/" in url and url.endswith("/forward"):
             self.forward_payloads.append({"url": url, "payload": payload})
         return self.move_payload
+
+    def _graph_patch(self, url, payload):
+        message_id = url.rsplit("/messages/", 1)[1]
+        self.patch_payloads.append({"message_id": message_id, "payload": payload})
+        self.operations.append({"operation": "patch", "message_id": message_id, "payload": payload})
 
 
 if __name__ == "__main__":

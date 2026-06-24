@@ -1264,6 +1264,30 @@ class ExtractionValidationTests(unittest.TestCase):
 
         self.assertLess(prompt.index("Extraction Batch Contract Checklist"), prompt.index("Thread-aware email body handling"))
 
+    def test_azure_openai_prompts_include_sanitized_html_context(self) -> None:
+        parsed = ParsedMsg(
+            subject="Invoice table",
+            sender_email="vendor@example.com",
+            sender_name="Vendor",
+            received_at=None,
+            body_text="Invoice summary",
+            body_html="<html><body><script>alert(1)</script><table><tr><td>Amount Due</td><td>$42.00</td></tr></table></body></html>",
+            transport_headers=None,
+            attachments=(),
+            metadata={},
+        )
+
+        detail_prompt = _prompt(parsed, [])
+        triage_prompt = _triage_prompt(parsed, [])
+
+        for prompt in (detail_prompt, triage_prompt):
+            self.assertIn('"sanitized_body_html"', prompt)
+            self.assertIn("Amount Due", prompt)
+            self.assertIn("$42.00", prompt)
+            self.assertIn("preserve email layout and label/value structure", prompt)
+            self.assertNotIn("<script>", prompt)
+            self.assertNotIn("alert(1)", prompt)
+
     def test_azure_openai_triage_prompt_forbids_routing_decisions(self) -> None:
         prompt = _triage_prompt(
             ParsedMsg(
@@ -1462,15 +1486,21 @@ class ExtractionValidationTests(unittest.TestCase):
         self.assertIn("Prefer Project, Job, Site, Service Location", prompt)
         self.assertIn("clear semantic near-match to exactly one listed asset", prompt)
         self.assertIn("Gateway 15 -> Alliance Gateway 15 / GW15", prompt)
+        self.assertIn("The Gateway 15 example applies only when the source visibly says Gateway", prompt)
         self.assertIn("Circle T Golf Course -> Circle T Golf / CTG", prompt)
         self.assertIn("Heritage Commons 2 -> Heritage Commons II / HC2", prompt)
         self.assertIn("vague family names or ambiguous partial names", prompt)
         self.assertIn("Preserve visible asset-code families exactly", prompt)
-        self.assertIn("Do not convert a visible Westport/WP code into an Alliance Gateway/GW code", prompt)
+        self.assertIn("Do not convert visible Westport/WP evidence into Alliance Gateway/GW evidence", prompt)
+        self.assertIn("Westport and Gateway are distinct asset families even when the building number overlaps", prompt)
         self.assertIn("Service at: WP9 400 Intermodal Pkwy", prompt)
         self.assertIn('property_lookup.property_code=["wp9"]', prompt)
         self.assertIn('property_lookup.property_name=["alliance westport 9"]', prompt)
         self.assertIn("must not return gw9 or alliance gateway 9", prompt)
+        self.assertIn('Project: 3085 Hillwood Alliance Westport 14 & 15', prompt)
+        self.assertIn('property_lookup.property_code=["gw15"]', prompt)
+        self.assertIn('property_lookup.property_name=["alliance gateway 15"]', prompt)
+        self.assertIn('keep "westport 14 & 15" in business_signals.possible_property_aliases', prompt)
         self.assertIn("If a visible code and a proposed canonical property name conflict", prompt)
         self.assertIn('property_lookup.property_name=["alliance gateway 34"]', prompt)
         self.assertIn('property_lookup.property_code=["gw34"]', prompt)
@@ -1550,6 +1580,34 @@ class ExtractionValidationTests(unittest.TestCase):
         self.assertIn("number-format variants", prompt)
         self.assertIn("when only one asset_reference row fits the visible phrase", prompt)
         self.assertIn("business_signals.possible_property_aliases", prompt)
+
+    def test_azure_openai_prompt_rejects_westport_to_gateway_number_overlap(self) -> None:
+        prompt = _prompt(
+            ParsedMsg(
+                subject="RE: GSRA Invoice - Westport 14 & 15 Outstanding Invoice",
+                sender_email="vendor@example.com",
+                sender_name="Vendor",
+                received_at=None,
+                body_text="Project: 3085 Hillwood Alliance Westport 14 & 15",
+                transport_headers=None,
+                attachments=(),
+                metadata={},
+            ),
+            [],
+            asset_reference_rows=[
+                {"asset_name": "Alliance Gateway 14", "asset_alias": "GW14", "asset_type": "Industrial", "address": None},
+                {"asset_name": "Alliance Gateway 15", "asset_alias": "GW15", "asset_type": "Industrial", "address": None},
+                {"asset_name": "Alliance Westport 15", "asset_alias": "WP15", "asset_type": "Industrial", "address": None},
+            ],
+        )
+
+        self.assertIn("Westport and Gateway are distinct asset families even when the building number overlaps", prompt)
+        self.assertIn('Project: 3085 Hillwood Alliance Westport 14 & 15', prompt)
+        self.assertIn('must not return property_lookup.property_code=["gw14"]', prompt)
+        self.assertIn('property_lookup.property_code=["gw15"]', prompt)
+        self.assertIn('property_lookup.property_name=["alliance gateway 14"]', prompt)
+        self.assertIn('property_lookup.property_name=["alliance gateway 15"]', prompt)
+        self.assertIn('keep "westport 14 & 15" in business_signals.possible_property_aliases', prompt)
 
     def test_contract_repair_prompt_tells_llm_to_remove_non_address_candidates(self) -> None:
         repair_prompt = contract_repair_prompt(
@@ -1708,7 +1766,7 @@ class ExtractionValidationTests(unittest.TestCase):
                     "content_type": "application/pdf",
                     "text_excerpt": (
                         "Invoice 2451 Westlake Parkway INVOICE NO. ACCOUNT NUMBER "
-                        "231068 5006 INVOICE DATE 06/23/2026"
+                        "231065 5006 INVOICE DATE 06/23/2026"
                     ),
                     "metadata": {"extractor_selection": {"selected_extractor": "pymupdf"}},
                 }
@@ -1718,8 +1776,10 @@ class ExtractionValidationTests(unittest.TestCase):
         self.assertIn("Invoice number disambiguation", prompt)
         self.assertIn("Extract invoice.invoice_number only from a value explicitly labeled", prompt)
         self.assertIn("Do not use numbers from service/property/bill-to addresses", prompt)
-        self.assertIn("Invoice 2451 Westlake Parkway INVOICE NO. ACCOUNT NUMBER 231068 5006", prompt)
-        self.assertIn("use the value associated with `INVOICE NO.` (`231068`) as invoice.invoice_number", prompt)
+        self.assertIn("Invoice 2451 Westlake Parkway INVOICE NO. ACCOUNT NUMBER 231065 5006", prompt)
+        self.assertIn("treat `2451 Westlake Parkway` as service address evidence", prompt)
+        self.assertIn("use the value associated with `INVOICE NO.` (`231065`) as invoice.invoice_number", prompt)
+        self.assertIn("treat `5006` as the account number", prompt)
 
     def test_azure_openai_triage_prompt_keeps_invoice_backup_as_item(self) -> None:
         prompt = _triage_prompt(

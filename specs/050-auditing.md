@@ -150,6 +150,12 @@ Processing failures must retry once before becoming final:
 - On the second processing exception, mark the known audit run as failed when Postgres is reachable.
 - If Postgres is unavailable and cannot record the failure, preserve the runtime exception so the host reports the invocation failure.
 
+Action-stage failures after `DECISION` are not full processing failures for retry purposes. Once a final decision and action plan have been persisted, a Graph mailbox, forwarding, or notification failure must:
+- write an `ACTION` audit step with the failed operation and error
+- write a failed `FINALIZE` step for the same audit run
+- preserve the runtime exception so the host reports the invocation failure
+- not create a second audit run for the same email attempt
+
 ## Visual Trace Artifact
 
 The system should produce a local visual trace artifact for debugging, such as Mermaid text or rendered diagram output.

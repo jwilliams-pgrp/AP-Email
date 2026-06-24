@@ -48,6 +48,10 @@ class _FixturePropertyMatchReviewer:
         return _FixturePropertyMatchSuggestion(str(asset_id)) if asset_id else None
 
 
+class _ActionStageError(RuntimeError):
+    pass
+
+
 class LocalProcessor:
     """Runs the LOCAL processing pipeline using Azure OpenAI or fixture extraction."""
 
@@ -121,6 +125,10 @@ class LocalProcessor:
             self._current_run_marked_failed = False
             try:
                 return operation()
+            except _ActionStageError as exc:
+                self._log_processing_failure_attempt(attempt, exc, context)
+                self._mark_current_run_failed("ACTION", str(exc), reason="Processing failed during post-decision action execution.")
+                raise
             except Exception as exc:
                 last_exc = exc
                 self._log_processing_failure_attempt(attempt, exc, context)
@@ -145,7 +153,7 @@ class LocalProcessor:
         }
         print(json.dumps(payload, sort_keys=True), flush=True)
 
-    def _mark_current_run_failed(self, failed_step: str, error: str) -> None:
+    def _mark_current_run_failed(self, failed_step: str, error: str, reason: str = "Processing failed after retry.") -> None:
         if not self._current_run_id or self._current_run_marked_failed:
             return
         try:
@@ -155,7 +163,7 @@ class LocalProcessor:
                 "FINALIZE",
                 {"run_id": self._current_run_id},
                 {"trace_artifact_path": trace_path, "final_outcome": None, "status": "failed"},
-                reason="Processing failed after retry.",
+                reason=reason,
                 error=error,
             )
         except Exception as finalize_exc:
@@ -901,13 +909,46 @@ class LocalProcessor:
             and destination is not None
             and destination.parent_folder
         ):
-            graph_result = self._graph_mailbox.route_message(
-                message_id=source_message_id_override,
-                existing_categories=graph_categories,
-                parent_folder=destination.parent_folder,
-                label=destination.label,
-                destination_display_name=destination.display_name,
-                destination_folder_path=None,
+            graph_route_input = {
+                "decision_id": decision_id,
+                "message_id": source_message_id_override,
+                "parent_folder": destination.parent_folder,
+                "label": destination.label,
+                "destination_display_name": destination.display_name,
+                "operation_order": ["category", "move"],
+            }
+            self._operational_repository.add_audit_step(
+                run_id,
+                "ACTION_GRAPH_ROUTE",
+                graph_route_input,
+                {"status": "started"},
+                reason="Starting Graph mailbox category and move action.",
+            )
+            try:
+                graph_result = self._graph_mailbox.route_message(
+                    message_id=source_message_id_override,
+                    existing_categories=graph_categories,
+                    parent_folder=destination.parent_folder,
+                    label=destination.label,
+                    destination_display_name=destination.display_name,
+                    destination_folder_path=None,
+                )
+            except Exception as exc:
+                self._operational_repository.add_audit_step(
+                    run_id,
+                    "ACTION",
+                    {"decision_id": decision_id, "graph_route": graph_route_input},
+                    {"action_plan_path": action_path, "graph_route": {"status": "failed"}},
+                    reason="Graph mailbox route failed during post-decision action execution.",
+                    error=str(exc),
+                )
+                raise _ActionStageError(f"Graph mailbox route failed: {exc}") from exc
+            self._operational_repository.add_audit_step(
+                run_id,
+                "ACTION_GRAPH_ROUTE",
+                graph_route_input,
+                {"status": "succeeded", "graph_result": graph_result},
+                reason="Graph mailbox category and move action succeeded.",
             )
             action_output["graph_result"] = graph_result
             if isinstance(graph_result.get("message_id"), str) and graph_result["message_id"]:
@@ -925,10 +966,21 @@ class LocalProcessor:
         ):
             runtime_config = load_runtime_config()
             if runtime_config.enable_outbound_email_forwarding and destination.email_address:
-                action_output["email_forward"] = self._graph_mailbox.forward_message(
-                    routed_graph_message_id,
-                    destination.email_address,
-                )
+                try:
+                    action_output["email_forward"] = self._graph_mailbox.forward_message(
+                        routed_graph_message_id,
+                        destination.email_address,
+                    )
+                except Exception as exc:
+                    self._operational_repository.add_audit_step(
+                        run_id,
+                        "ACTION",
+                        {"decision_id": decision_id, "message_id": routed_graph_message_id, "recipient_email": destination.email_address},
+                        {"action_plan_path": action_path, "email_forward": {"status": "failed"}},
+                        reason="Graph mailbox forward failed during post-decision action execution.",
+                        error=str(exc),
+                    )
+                    raise _ActionStageError(f"Graph mailbox forward failed: {exc}") from exc
             else:
                 action_output["email_forward"] = {
                     "forwarded": False,
@@ -939,13 +991,24 @@ class LocalProcessor:
                 }
         if destination is not None and destination.send_teams_message:
             teams_notifier = self._teams_notifier or TeamsNotifier.from_env()
-            teams_result = teams_notifier.send_review_notification(
-                TeamsReviewNotification(
-                    email_subject=email_metadata.get("subject"),
-                    routing_path=_routing_path(destination),
-                    office_web_link=final_office_web_link,
+            try:
+                teams_result = teams_notifier.send_review_notification(
+                    TeamsReviewNotification(
+                        email_subject=email_metadata.get("subject"),
+                        routing_path=_routing_path(destination),
+                        office_web_link=final_office_web_link,
+                    )
                 )
-            )
+            except Exception as exc:
+                self._operational_repository.add_audit_step(
+                    run_id,
+                    "ACTION",
+                    {"decision_id": decision_id, "routing_path": _routing_path(destination)},
+                    {"action_plan_path": action_path, "teams_notification": {"status": "failed"}},
+                    reason="Teams notification failed during post-decision action execution.",
+                    error=str(exc),
+                )
+                raise _ActionStageError(f"Teams notification failed: {exc}") from exc
             action_output["teams_notification"] = {"sent": True, **teams_result}
         self._operational_repository.add_audit_step(
             run_id,

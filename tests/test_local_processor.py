@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 import unittest
 from dataclasses import replace
@@ -2874,6 +2875,44 @@ class LocalProcessorTests(unittest.TestCase):
             action_step = next(step for step in operational_repository.steps if step["step_type"] == "ACTION")
             self.assertIn("graph_result", action_step["output_summary"])
 
+    def test_graph_action_failure_does_not_replay_full_processing_pipeline(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fixture = root / "tests" / "fixtures" / "extractions" / "sample.json"
+            fixture.parent.mkdir(parents=True)
+            fixture.write_text(json.dumps(_payload()), encoding="utf-8")
+
+            operational_repository = InMemoryOperationalRepository()
+            graph_mailbox = FailingGraphMailboxClient("Graph POST failed (404): ErrorItemNotFound")
+            processor = LocalProcessor(
+                root,
+                InMemoryPolicyRepository(),
+                operational_repository,
+                graph_mailbox=graph_mailbox,
+            )
+            envelope = FakeGraphMessageEnvelope(
+                message_id="claimed-processing-msg-1",
+                categories=("Inbox",),
+                internet_message_id="<internet-id-1>",
+                web_link="https://outlook.office.com/mail/processing/id/claimed-processing-msg-1",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "Graph mailbox route failed"):
+                processor.process_graph_email(envelope, extraction_fixture_path=fixture)
+
+            self.assertEqual(len(graph_mailbox.calls), 1)
+            self.assertEqual(len(operational_repository.extractions), 1)
+            self.assertEqual(operational_repository.runs["run-1"]["status"], "failed")
+            self.assertEqual(
+                [step["step_type"] for step in operational_repository.steps if step["step_type"] == "DECISION"],
+                ["DECISION"],
+            )
+            failed_action = next(step for step in operational_repository.steps if step["step_type"] == "ACTION" and step["error"])
+            self.assertIn("ErrorItemNotFound", failed_action["error"])
+            finalize_step = operational_repository.steps[-1]
+            self.assertEqual(finalize_step["step_type"], "FINALIZE")
+            self.assertEqual(finalize_step["output_summary"]["status"], "failed")
+
     def test_graph_intake_processes_without_extraction_fixture(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -3050,7 +3089,45 @@ class LocalProcessorTests(unittest.TestCase):
             self.assertEqual(graph_mailbox.calls[0]["message_id"], "graph-msg-1")
             self.assertEqual(graph_mailbox.forwards, [{"message_id": "moved-graph-msg-1", "recipient_email": "medius@example.com"}])
             action_step = next(step for step in operational_repository.steps if step["step_type"] == "ACTION")
-            self.assertEqual(action_step["output_summary"]["email_forward"], {"forwarded": True, "recipient_email": "medius@example.com"})
+            self.assertEqual(
+                action_step["output_summary"]["email_forward"],
+                {"forwarded": True, "recipient_email": "medius@example.com", "recipient_emails": ["medius@example.com"]},
+            )
+
+    def test_graph_intake_forwards_to_multiple_destination_recipients(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fixture = root / "tests" / "fixtures" / "extractions" / "sample.json"
+            fixture.parent.mkdir(parents=True)
+            fixture.write_text(json.dumps(_payload()), encoding="utf-8")
+
+            operational_repository = InMemoryOperationalRepository()
+            graph_mailbox = FakeGraphMailboxClient()
+            policy_repository = InMemoryPolicyRepository()
+            policy_repository.destinations["MEDIUS_PROPERTIES"] = replace(
+                policy_repository.destinations["MEDIUS_PROPERTIES"],
+                email_address="Michele.Fellers@hillwood.com;Aliyah.Reyes@hillwood.com",
+                send_email=True,
+            )
+            processor = LocalProcessor(root, policy_repository, operational_repository, graph_mailbox=graph_mailbox)
+            envelope = FakeGraphMessageEnvelope(message_id="graph-msg-1", categories=("Inbox",), internet_message_id="<internet-id-1>")
+
+            with patch.dict("os.environ", {"APP_ENV": "AZURE", "AP_ENABLE_OUTBOUND_EMAIL_FORWARDING": "true"}, clear=False):
+                processor.process_graph_email(envelope, extraction_fixture_path=fixture)
+
+            self.assertEqual(
+                graph_mailbox.forwards,
+                [{"message_id": "moved-graph-msg-1", "recipient_email": "Michele.Fellers@hillwood.com;Aliyah.Reyes@hillwood.com"}],
+            )
+            action_step = next(step for step in operational_repository.steps if step["step_type"] == "ACTION")
+            self.assertEqual(
+                action_step["output_summary"]["email_forward"],
+                {
+                    "forwarded": True,
+                    "recipient_email": "Michele.Fellers@hillwood.com;Aliyah.Reyes@hillwood.com",
+                    "recipient_emails": ["Michele.Fellers@hillwood.com", "Aliyah.Reyes@hillwood.com"],
+                },
+            )
 
     def test_graph_intake_does_not_forward_without_destination_send_email(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3744,8 +3821,36 @@ class FakeGraphMailboxClient:
         }
 
     def forward_message(self, message_id: str, recipient_email: str, comment: str | None = None) -> dict[str, Any]:
+        recipients = [address for address in (part.strip() for part in re.split(r"[;,]", recipient_email)) if address]
         self.forwards.append({"message_id": message_id, "recipient_email": recipient_email})
-        return {"forwarded": True, "recipient_email": recipient_email}
+        return {"forwarded": True, "recipient_email": recipient_email.strip(), "recipient_emails": recipients}
+
+
+class FailingGraphMailboxClient(FakeGraphMailboxClient):
+    def __init__(self, error: str) -> None:
+        super().__init__()
+        self.error = error
+
+    def route_message(
+        self,
+        message_id: str,
+        existing_categories: tuple[str, ...],
+        parent_folder: str | None,
+        label: str | None,
+        destination_display_name: str | None = None,
+        destination_folder_path: str | None = None,
+    ) -> dict[str, Any]:
+        self.calls.append(
+            {
+                "message_id": message_id,
+                "existing_categories": existing_categories,
+                "parent_folder": parent_folder,
+                "label": label,
+                "destination_display_name": destination_display_name,
+                "destination_folder_path": destination_folder_path,
+            }
+        )
+        raise RuntimeError(self.error)
 
 
 class FakeGraphMessageEnvelope:

@@ -23,9 +23,11 @@ The system must support local development and testing while also supporting Azur
 - Graph Intake processing must claim exactly one email per run by selecting the oldest Inbox message with `receivedDateTime asc`, moving it to an existing shared mailbox folder with display name `processing`, and processing only the moved mailbox item.
 - Graph Intake processing must use the post-claim Graph message id and Office web link for extraction metadata, audit records, and final mailbox actions.
 - The CLI must read Azure OpenAI configuration from `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION`, and `AZURE_OPENAI_DEPLOYMENT`, with equivalent CLI overrides. API-key authentication is allowed only for local development when identity is unavailable.
-- Microsoft Graph mailbox mutations (move/category) run for Graph Intake processing when the destination has a configured `parent_folder`.
+- Microsoft Graph mailbox mutations (category/move) run for Graph Intake processing when the destination has a configured `parent_folder`.
 - For Graph Intake folder destinations, the runtime must resolve mailbox folder IDs from configured `parent_folder` values during processing; destination IDs must not be hard-coded in application logic.
 - For Graph Intake messages that are moved, final routing must move the claimed item from `processing` to the configured destination folder and the persisted `office_web_link` and ESCALATE notifications must use the message link after the final move when Graph returns one.
+- For Graph Intake messages with a configured label and destination folder, final routing must apply the label to the claimed message before moving it to the destination folder. This avoids relying on immediate post-move mailbox consistency for category updates.
+- Graph Intake action-stage failures after the final decision must not replay ingestion, extraction, validation, routing, or decision creation. They must be audited as action failures on the same audit run.
 - Local and development runtime must not forward routed emails to destination recipients, even when `routing_destinations.send_email` is true. Outbound email forwarding requires Azure runtime and explicit `AP_ENABLE_OUTBOUND_EMAIL_FORWARDING=true`.
 - If Graph Intake processing fails after a message is claimed, the runtime must attempt to move the claimed item to the existing `ESCALATE` folder and must report any failure of that recovery move explicitly.
 - Runtime behavior must not branch into a separate non-mutating execution mode.
@@ -54,6 +56,7 @@ The system must support local development and testing while also supporting Azur
 - A decision is written to local Postgres.
 - Audit run and audit step records are written to local Postgres.
 - Action records capture mailbox routing attempts and results.
+- Action audit records capture Graph category and move substeps, including failures, without recording raw email body or attachment contents.
 - Reprocessing the same sample email does not create duplicate actions.
 - A Graph Intake email can be processed with one documented local command.
 - Graph Intake processing can iterate through all available intake emails with one documented local command.

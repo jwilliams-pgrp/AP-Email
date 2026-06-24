@@ -7,6 +7,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from base64 import b64encode
 from dataclasses import dataclass
 from difflib import get_close_matches
 from pathlib import Path
@@ -14,6 +15,7 @@ from typing import Any
 
 from ap_automation.models.extraction import DOCUMENT_TYPES
 from ap_automation.models.extraction import ExtractionTriageBatch
+from ap_automation.services.local_artifacts import _sanitize_preview_html, local_artifact_path
 from ap_automation.services.msg_parser import ParsedMsg
 from ap_automation.services.thread_context import latest_body_text
 
@@ -90,6 +92,8 @@ TYPE_CONTRACT_RULES = (
     "- Wrong: {\"evidence\":{\"source_refs\":[\"invoice.pdf:1\"]}} Correct: {\"evidence\":{\"source_refs\":[{\"attachment\":\"invoice.pdf\",\"page\":1}]}}\n"
 )
 
+SANITIZED_HTML_CONTEXT_MAX_CHARS = 12000
+
 COMPACT_EXTRACTION_BATCH_CONTRACT = (
     "Extraction Batch Contract Checklist:\n"
     "- Return exactly one extraction_batch.v1 JSON object with schema_version, excluded_attachments, and items.\n"
@@ -121,8 +125,9 @@ class AzureOpenAIExtractor:
         asset_reference_rows: list[dict[str, Any]] | None = None,
     ) -> ExtractionAttempt:
         prompt = _prompt(parsed_msg, attachment_records, asset_reference_rows=asset_reference_rows)
+        attachment_context = _attachment_context_parts(self.project_root, attachment_records)
         try:
-            result = self.run_json_prompt(prompt)
+            result = self.run_json_prompt(prompt, attachment_context=attachment_context)
             attempts: tuple[dict[str, Any], ...] = ()
         except AzureOpenAIExtractionError as exc:
             if not exc.raw_response:
@@ -177,8 +182,9 @@ class AzureOpenAIExtractor:
         attachment_records: list[dict[str, Any]],
     ) -> ExtractionAttempt:
         prompt = _triage_prompt(parsed_msg, attachment_records)
+        attachment_context = _attachment_context_parts(self.project_root, attachment_records)
         try:
-            result = self.run_json_prompt(prompt)
+            result = self.run_json_prompt(prompt, attachment_context=attachment_context)
             attempts: tuple[dict[str, Any], ...] = ()
         except AzureOpenAIExtractionError as exc:
             if not exc.raw_response:
@@ -239,8 +245,9 @@ class AzureOpenAIExtractor:
             asset_reference_rows=asset_reference_rows,
             triage_payload=triage_batch.raw,
         )
+        attachment_context = _attachment_context_parts(self.project_root, attachment_records)
         try:
-            result = self.run_json_prompt(prompt)
+            result = self.run_json_prompt(prompt, attachment_context=attachment_context)
             attempts: tuple[dict[str, Any], ...] = ()
         except AzureOpenAIExtractionError as exc:
             if not exc.raw_response:
@@ -289,7 +296,7 @@ class AzureOpenAIExtractor:
             attempts=attempts,
         )
 
-    def run_json_prompt(self, prompt: str) -> "JsonPromptResult":
+    def run_json_prompt(self, prompt: str, attachment_context: "AttachmentContext | None" = None) -> "JsonPromptResult":
         endpoint = self._endpoint()
         api_version = self._api_version()
         deployment = self._deployment()
@@ -301,13 +308,18 @@ class AzureOpenAIExtractor:
             f"{endpoint.rstrip('/')}/openai/deployments/{urllib.parse.quote(deployment, safe='')}/chat/completions"
             f"?api-version={urllib.parse.quote(api_version, safe='')}"
         )
+        user_content: str | list[dict[str, Any]]
+        if attachment_context and attachment_context.content_parts:
+            user_content = [{"type": "text", "text": prompt}, *attachment_context.content_parts]
+        else:
+            user_content = prompt
         request_payload = {
             "messages": [
                 {
                     "role": "system",
                     "content": "Return only valid JSON for AP Automation extraction and interpretation tasks.",
                 },
-                {"role": "user", "content": prompt},
+                {"role": "user", "content": user_content},
             ],
             "temperature": 0,
             "response_format": {"type": "json_object"},
@@ -316,6 +328,8 @@ class AzureOpenAIExtractor:
             "temperature": request_payload["temperature"],
             "response_format": request_payload["response_format"],
         }
+        if attachment_context and attachment_context.audit_metadata:
+            request_parameters["attachment_context"] = attachment_context.audit_metadata
         body = json.dumps(request_payload).encode("utf-8")
         request = urllib.request.Request(
             url,
@@ -402,6 +416,139 @@ class AzureOpenAIExtractor:
         return {"Authorization": f"Bearer {token}"}
 
 
+@dataclass(frozen=True)
+class AttachmentContext:
+    content_parts: list[dict[str, Any]]
+    audit_metadata: dict[str, Any]
+
+
+SUPPORTED_FILE_CONTEXT_EXTENSIONS = {".pdf", ".doc", ".docx"}
+SUPPORTED_FILE_CONTEXT_CONTENT_TYPES = {
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+SUPPORTED_IMAGE_CONTEXT_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".heif"}
+SUPPORTED_IMAGE_CONTEXT_CONTENT_TYPES = {
+    "image/png",
+    "image/jpeg",
+    "image/tiff",
+    "image/bmp",
+    "image/heif",
+}
+DEFAULT_FILE_CONTEXT_CONTENT_TYPES = {
+    ".pdf": "application/pdf",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+DEFAULT_IMAGE_CONTEXT_CONTENT_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
+    ".bmp": "image/bmp",
+    ".heif": "image/heif",
+}
+
+
+def _attachment_context_parts(project_root: Path, attachment_records: list[dict[str, Any]]) -> AttachmentContext:
+    content_parts: list[dict[str, Any]] = []
+    attached: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for record in attachment_records:
+        file_name = str(record.get("file_name") or record.get("storage_path") or "attachment")
+        suffix = Path(file_name).suffix.lower() or Path(str(record.get("storage_path") or "")).suffix.lower()
+        content_type = str(record.get("content_type") or "").strip().lower()
+        metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+        is_inline = bool(metadata.get("is_inline"))
+
+        context_kind = _attachment_context_kind(suffix, content_type, is_inline=is_inline)
+        if context_kind is None:
+            skipped.append(
+                {
+                    "file_name": file_name,
+                    "content_type": content_type or None,
+                    "reason": "unsupported_type_or_inline_image",
+                }
+            )
+            continue
+
+        mime_type = _context_mime_type(suffix, content_type, context_kind)
+        try:
+            data = local_artifact_path(project_root, record).read_bytes()
+        except Exception as exc:
+            skipped.append(
+                {
+                    "file_name": file_name,
+                    "content_type": content_type or None,
+                    "reason": "read_failed",
+                    "error": f"{exc.__class__.__name__}: {exc}",
+                }
+            )
+            continue
+
+        data_url = f"data:{mime_type};base64,{b64encode(data).decode('ascii')}"
+        if context_kind == "image":
+            content_parts.append({"type": "image_url", "image_url": {"url": data_url}})
+        else:
+            content_parts.append(
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": file_name,
+                        "file_data": data_url,
+                    },
+                }
+            )
+        attached.append(
+            {
+                "file_name": file_name,
+                "content_type": mime_type,
+                "context_kind": context_kind,
+                "file_size_bytes": len(data),
+            }
+        )
+
+    return AttachmentContext(
+        content_parts=content_parts,
+        audit_metadata={
+            "attached_file_count": len(attached),
+            "attached_files": attached,
+            "skipped_file_count": len(skipped),
+            "skipped_files": skipped,
+        },
+    )
+
+
+def _attachment_context_kind(suffix: str, content_type: str, *, is_inline: bool) -> str | None:
+    if suffix in SUPPORTED_FILE_CONTEXT_EXTENSIONS or content_type in SUPPORTED_FILE_CONTEXT_CONTENT_TYPES:
+        return "file"
+    if suffix in SUPPORTED_IMAGE_CONTEXT_EXTENSIONS or content_type in SUPPORTED_IMAGE_CONTEXT_CONTENT_TYPES:
+        return None if is_inline else "image"
+    return None
+
+
+def _context_mime_type(suffix: str, content_type: str, context_kind: str) -> str:
+    if context_kind == "file":
+        if content_type in SUPPORTED_FILE_CONTEXT_CONTENT_TYPES:
+            return content_type
+        return DEFAULT_FILE_CONTEXT_CONTENT_TYPES.get(suffix, "application/octet-stream")
+    if content_type in SUPPORTED_IMAGE_CONTEXT_CONTENT_TYPES:
+        return content_type
+    return DEFAULT_IMAGE_CONTEXT_CONTENT_TYPES.get(suffix, "application/octet-stream")
+
+
+def _sanitized_body_html_context(parsed_msg: ParsedMsg) -> str | None:
+    if not parsed_msg.body_html or not parsed_msg.body_html.strip():
+        return None
+    sanitized = _sanitize_preview_html(parsed_msg.body_html)
+    normalized = sanitized.strip()
+    if not normalized:
+        return None
+    return normalized[:SANITIZED_HTML_CONTEXT_MAX_CHARS]
+
+
 def _prompt(
     parsed_msg: ParsedMsg,
     attachment_records: list[dict[str, Any]],
@@ -431,6 +578,7 @@ def _prompt(
             "received_at": parsed_msg.received_at.isoformat() if parsed_msg.received_at else None,
             "latest_body_text": latest_body_text(parsed_msg.metadata, parsed_msg.body_text),
             "body_text": parsed_msg.body_text,
+            "sanitized_body_html": _sanitized_body_html_context(parsed_msg),
             "thread_context": (parsed_msg.metadata or {}).get("thread_context"),
             "transport_headers": parsed_msg.transport_headers,
         },
@@ -459,6 +607,8 @@ def _prompt(
     return (
         "You are the local LLM extractor for the AP Automation system.\n"
         "Return only one JSON object. Do not include Markdown, prose, or code fences.\n"
+        "Supported original email attachments may be attached to this request as additional context to improve extraction accuracy; use them only as source evidence for the JSON extraction contract, while deterministic code makes final routing decisions.\n"
+        "email.sanitized_body_html may be provided only to preserve email layout and label/value structure; do not treat it as a separate attachment or let it override email.latest_body_text thread-handling rules.\n"
         f"{COMPACT_EXTRACTION_BATCH_CONTRACT}\n"
         f"{TYPE_CONTRACT_RULES}\n"
         "Return an extraction_batch.v1 envelope with one item per AP workflow-relevant non-inline attachment and, only when the email body independently contains routing facts or exceptions not already represented by a selected readable attachment, one email-level item. Routine cover text that says an invoice, bill, statement, or document is attached is context for the attachment item only and must not create a separate email-level item. Generated invoice email summaries, including BuildOps-style bodies that repeat invoice number, due date, total, balance due, bill-to, or payment summary, are also context only when a selected readable invoice attachment already contains the same invoice. If validated triage includes an email-only item but detailed evidence shows the email body only duplicates a selected readable attachment, omit that email item from the final extraction_batch.v1. Bill-to-only facts in the email body must not create a second invoice item when the attachment has stronger service, property, site, or location evidence. Each item.extraction must be a complete extraction.v1 payload with required sections present. Put clearly irrelevant reviewed attachments in batch-level excluded_attachments, not in items. The deterministic rules engine will make final routing decisions.\n"
@@ -482,11 +632,12 @@ def _prompt(
         "Use asset_reference only when the email or selected attachment text visibly matches a listed asset_name, asset_alias, asset_type, or address. "
         "Use asset_type only to normalize source-visible property text such as Retail, Multifamily, Ground Lease, Project, Job, Site, or Service Location; do not use asset_type to invent facts or make routing decisions. "
         "When visible source text exactly matches or is a clear semantic near-match to exactly one listed asset, populate canonical normalized lookup candidates such as property_lookup.property_name=[\"alliance gateway 34\"] and property_lookup.property_code=[\"gw34\"]. "
-        "Clear semantic near-matches include missing common portfolio prefixes, suffix variants, number-format variants, and configured alias variants when only one asset_reference row fits the visible phrase, such as Gateway 15 -> Alliance Gateway 15 / GW15, Circle T Golf Course -> Circle T Golf / CTG, and Heritage Commons 2 -> Heritage Commons II / HC2. "
+        "Clear semantic near-matches include missing common portfolio prefixes, suffix variants, number-format variants, and configured alias variants when only one asset_reference row fits the visible phrase, such as Gateway 15 -> Alliance Gateway 15 / GW15, Circle T Golf Course -> Circle T Golf / CTG, and Heritage Commons 2 -> Heritage Commons II / HC2. The Gateway 15 example applies only when the source visibly says Gateway, Alliance Gateway, GW, or an allowed AG shorthand; it does not apply when the source says Westport. "
         "Do not normalize vague family names or ambiguous partial names such as Gateway, Circle T, Commons, or Westport into a property code or property_name when multiple configured assets could fit; keep those uncertain values in business_signals.possible_property_aliases or evidence.summary. "
         "Preserve visible asset-code families exactly. Codes such as WP9, GW9, HC2, HWC2, ACC 14, and ACN5 identify different configured alias families unless the source visibly provides an accepted alias variant. "
-        "Do not convert a visible Westport/WP code into an Alliance Gateway/GW code, or a visible Gateway/GW code into a Westport/WP code. "
+        "Do not convert visible Westport/WP evidence into Alliance Gateway/GW evidence, or visible Gateway/GW evidence into Westport/WP evidence. Westport and Gateway are distinct asset families even when the building number overlaps. "
         "Negative example: source text \"Service at: WP9 400 Intermodal Pkwy\" with asset_reference containing WP9 / Alliance Westport 9 and GW9 / Alliance Gateway 9 must not return gw9 or alliance gateway 9; it should return property_lookup.property_code=[\"wp9\"] and property_lookup.property_name=[\"alliance westport 9\"] when supported, or omit the property_name if not confidently supported. "
+        "Negative example: source text \"Project: 3085 Hillwood Alliance Westport 14 & 15\" must not return property_lookup.property_code=[\"gw14\"], property_lookup.property_code=[\"gw15\"], property_lookup.property_name=[\"alliance gateway 14\"], or property_lookup.property_name=[\"alliance gateway 15\"]; keep \"westport 14 & 15\" in business_signals.possible_property_aliases and/or invoice.service_address unless a configured Westport asset is visibly identified. "
         "If a visible code and a proposed canonical property name conflict, keep the visible code, remove the unsupported canonical name, lower confidence.property_identity, and set observed_facts.has_conflicting_signals=true. "
         "Labeled identity fields such as Project, Job, Site, Location, Service Location, Property, Building, Facility, Work Site, Ship To, Deliver To, Sold To, Customer, Account, Attention, and similar labels are source-visible property identity evidence when their values contain property, building, site, tenant, address, or asset-code facts. "
         "Do not limit property evidence capture to Bill To or Ship To blocks; vendors may use nonstandard labels or unlabeled adjacent customer/site/address blocks. "
@@ -699,6 +850,9 @@ def _prompt(
         "}\n"
         "Required fields must be present even when values are null, false, 0.0, or empty arrays. "
         "Use invoice.amount, not amount_due. Use confidence.invoice_fields and confidence.property_identity. "
+        "Invoice number disambiguation: Extract invoice.invoice_number only from a value explicitly labeled as invoice number, invoice no, invoice #, inv no, or equivalent. "
+        "Do not use numbers from service/property/bill-to addresses, account numbers, license numbers, dates, amounts, ZIP codes, phone numbers, or line items. "
+        "If flattened PDF text combines an invoice title/address with labels, such as `Invoice 2451 Westlake Parkway INVOICE NO. ACCOUNT NUMBER 231065 5006`, treat `2451 Westlake Parkway` as service address evidence, use the value associated with `INVOICE NO.` (`231065`) as invoice.invoice_number, and treat `5006` as the account number; do not use the service address number or account number as invoice.invoice_number. "
         "Extract explicit PROJECT NO or PROJECT NUMBER values into invoice.project_number. "
         "Extract explicit JOB NO or JOB NUMBER values into invoice.job_number, never invoice.project_number. "
         "Use observed_facts for source-observable conditions, not document flags. "
@@ -783,6 +937,7 @@ def _triage_prompt(parsed_msg: ParsedMsg, attachment_records: list[dict[str, Any
             "received_at": parsed_msg.received_at.isoformat() if parsed_msg.received_at else None,
             "latest_body_text": latest_body_text(parsed_msg.metadata, parsed_msg.body_text),
             "body_text": parsed_msg.body_text,
+            "sanitized_body_html": _sanitized_body_html_context(parsed_msg),
             "thread_context": (parsed_msg.metadata or {}).get("thread_context"),
             "transport_headers": parsed_msg.transport_headers,
         },
@@ -792,6 +947,8 @@ def _triage_prompt(parsed_msg: ParsedMsg, attachment_records: list[dict[str, Any
     return (
         "You are the first-pass triage classifier for the AP Automation system.\n"
         "Return only one JSON object. Do not include Markdown, prose, or code fences.\n"
+        "Supported original email attachments may be attached to this request as additional context to improve extraction accuracy; use them only for itemization, classification, and source-visible risk facts.\n"
+        "email.sanitized_body_html may be provided only to preserve email layout and label/value structure; do not treat it as a separate attachment or let it override email.latest_body_text thread-handling rules.\n"
         "Return exactly one extraction_triage_batch.v1 object with schema_version, excluded_attachments, and items.\n"
         "Triage is for itemization, document classification, AP relevance, extraction-route selection, and source-visible risk flags only.\n"
         "Do not return workflow rules, outcomes, destinations, destination emails, recipients, property candidates, or final routing decisions.\n"
